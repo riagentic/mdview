@@ -1,0 +1,32 @@
+{
+  "title": "mdview",
+  "nodeModulesDir": "auto",
+  "unstable": ["kv"],
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "jsxImportSourceTypes": "@types/react"
+  },
+  "imports": {
+    "@types/react": "npm:@types/react@^18",
+    "electron": "npm:electron@^40.6.1",
+    "react": "npm:react@^18",
+    "react-dom": "npm:react-dom@^18",
+    "aio": "./dep/aio/mod.ts",
+    "esbuild": "npm:esbuild@^0.27.3",
+    "immer": "npm:immer@^10",
+    "@std/path": "jsr:@std/path@^1",
+    "marked": "npm:marked@^14",
+    "highlight.js": "npm:highlight.js@^11"
+  },
+  "tasks": {
+    "dev": "deno run -A src/app.ts",
+    "am": "deno run -A dep/aio/src/am.ts",
+    "test": "deno test -A --unstable-kv dep/aio/tests/",
+    "compile": "deno run -A dep/aio/src/build.ts --compile",
+    "compile:electron": "deno run -A dep/aio/src/build.ts --compile --electron",
+    "compile:electron:remote": "deno run -A dep/aio/src/build.ts --compile --electron --remote",
+    "compile:android": "deno run -A dep/aio/src/build.ts --android"
+  },
+  "allowScripts": ["npm:electron"]
+}
