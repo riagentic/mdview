@@ -1,6 +1,11 @@
 node_modules/
-dep
+dep/
 dist/
 *.AppImage
-mdview
+/mdview
 data.kv
+/log/
+/test/
+/telemetry-id
+.aio.log
+.*.swp

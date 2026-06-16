@@ -1,0 +1,14 @@
+[Unit]
+Description=mdview (aio)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mdview --port=3000  # adjust path after install
+Restart=on-failure
+RestartSec=5
+User=dev
+Environment=HOME=/home/dev
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,539 @@
+import { cell, log } from 'aio'
+import type { HistoryEntry, Mode, MdviewState, Theme, TreeNode } from '../type/mdview.ts'
+
+export type { HistoryEntry, Mode, MdviewState, Theme, TreeNode } from '../type/mdview.ts'
+
+// Server-only helpers. Template-literal path prevents esbuild from statically
+// resolving mdview-io (which uses Deno.*) into the browser bundle.
+const _hp = './mdview-io'
+const loadHelpers = () => import(`${_hp}.ts`)
+
+// onInit self-dispatch (methods use { args: [...] } payload format)
+const requestOpenAction = (filePath = '', scrollY = 0) =>
+  ({ type: 'mdview:requestOpen' as const, payload: { args: [filePath, scrollY] } })
+const setWorkspaceAction = (dir: string) =>
+  ({ type: 'mdview:setWorkspace' as const, payload: { args: [dir] } })
+const closeDocAction = () =>
+  ({ type: 'mdview:closeDoc' as const, payload: { args: [] } })
+const setSidebarVisibleAction = (visible: boolean) =>
+  ({ type: 'mdview:setSidebarVisible' as const, payload: { args: [visible] } })
+
+// Server-only: filesystem watcher lifecycle + rescan debounce timer.
+// Lives at module scope because methods are reducers (no place for resources).
+let workspaceWatcherDispose: (() => void) | null = null
+let rescanTimer: number = 0
+
+// ── Cell ───────────────────────────────────────────────────────────
+
+export const mdview = cell('mdview', {
+
+  state: {
+    filePath: '',
+    scrollY: 0,
+    zoom: 100,
+    html: '',
+    fileName: '',
+    error: null as string | null,
+    history: [] as HistoryEntry[],
+    historyIndex: -1,
+    lastDir: '',
+
+    theme: 'light' as Theme,
+
+    workspaceDir: '',
+    sidebarVisible: false,
+    sidebarWidth: 260,
+    tree: [] as TreeNode[],
+    fsError: null as string | null,
+
+    mode: 'view' as Mode,
+    rawText: '',
+    loadedMtime: 0,
+    externallyChanged: false,
+    externalMtime: 0,
+    dirty: false,
+    userAckedExternal: false,
+  } satisfies MdviewState,
+
+  persist: {
+    exclude: [
+      'html', 'fileName', 'error', 'history', 'historyIndex',
+      'tree', 'fsError', 'rawText', 'loadedMtime', 'externallyChanged', 'externalMtime', 'dirty', 'userAckedExternal',
+    ],
+  },
+
+  machine: {
+    initial: 'empty',
+    states: {
+      empty: {
+        requestOpen: 'viewing',
+        requestOpenFolder: 'empty',
+        closeDoc: 'empty',
+        setWorkspace: 'empty',
+        rescanTree: 'empty',
+        toggleSidebar: 'empty',
+        setSidebarVisible: 'empty',
+        setSidebarWidth: 'empty',
+        checkExternalChange: 'empty',
+        setMode: 'empty',
+        toggleTheme: 'empty', setTheme: 'empty',
+        createFileIn: 'empty', createFolderIn: 'empty',
+        renameEntry: 'empty', deleteEntry: 'empty', clearFsError: 'empty',
+      },
+      viewing: {
+        requestOpen: 'viewing',
+        requestOpenFolder: 'viewing',
+        setScroll: 'viewing', setZoom: 'viewing', closeDoc: 'empty',
+        navigateTo: 'viewing', goBack: 'viewing', goForward: 'viewing',
+        setWorkspace: 'viewing', rescanTree: 'viewing',
+        toggleSidebar: 'viewing', setSidebarVisible: 'viewing',
+        setSidebarWidth: 'viewing',
+        setMode: 'viewing', saveEdit: 'viewing',
+        toggleTheme: 'viewing', setTheme: 'viewing',
+        applyExternalReload: 'viewing', dismissExternalBanner: 'viewing',
+        checkExternalChange: 'viewing',
+        createFileIn: 'viewing', createFolderIn: 'viewing',
+        renameEntry: 'viewing', deleteEntry: 'viewing', clearFsError: 'viewing',
+      },
+    },
+  },
+
+  methods: {
+    setScroll(s: MdviewState, y: number) { s.scrollY = y },
+    setZoom(s: MdviewState, zoom: number) { s.zoom = zoom },
+
+    closeDoc(s: MdviewState) {
+      s.filePath = ''
+      s.html = ''
+      s.fileName = ''
+      s.scrollY = 0
+      s.error = null
+      s.history = []
+      s.historyIndex = -1
+      s.rawText = ''
+      s.loadedMtime = 0
+      s.externallyChanged = false
+      s.dirty = false
+      s.userAckedExternal = false
+      s.mode = 'view'
+    },
+
+    toggleSidebar(s: MdviewState) {
+      s.sidebarVisible = !s.sidebarVisible
+    },
+
+    setSidebarVisible(s: MdviewState, visible: boolean) {
+      s.sidebarVisible = !!visible
+    },
+
+    setSidebarWidth(s: MdviewState, px: number) {
+      s.sidebarWidth = Math.max(160, Math.min(640, Math.round(px)))
+    },
+
+    setMode(s: MdviewState, mode: Mode) {
+      s.mode = mode
+    },
+
+    toggleTheme(s: MdviewState) {
+      s.theme = s.theme === 'dark' ? 'light' : 'dark'
+    },
+
+    setTheme(s: MdviewState, theme: Theme) {
+      s.theme = theme === 'dark' ? 'dark' : 'light'
+    },
+
+    async requestOpenFolder(s: MdviewState) {
+      const { folderDialog, scanTree, watchWorkspace } = await loadHelpers()
+      const dir = await folderDialog(s.workspaceDir || s.lastDir)
+      if (!dir) return
+      workspaceWatcherDispose?.()
+      workspaceWatcherDispose = null
+      s.workspaceDir = dir
+      s.tree = await scanTree(dir)
+      s.sidebarVisible = true
+      workspaceWatcherDispose = watchWorkspace(dir, () => {
+        clearTimeout(rescanTimer)
+        rescanTimer = setTimeout(() => {
+          mdview.rescanTree()
+          mdview.checkExternalChange()
+        }, 200) as unknown as number
+      })
+      s.filePath = ''
+      s.html = ''
+      s.fileName = ''
+      s.error = null
+      s.rawText = ''
+      s.loadedMtime = 0
+      s.externallyChanged = false
+      s.dirty = false
+      s.userAckedExternal = false
+      s.mode = 'view'
+      s.history = []
+      s.historyIndex = -1
+    },
+
+    async requestOpen(s: MdviewState, filePath = '', scrollY = 0) {
+      const { readAndRenderFile, fileDialog, getFileDir, formatError } = await loadHelpers()
+      s.error = null
+
+      let targetPath = filePath
+      if (!targetPath) {
+        const path = await fileDialog(s.lastDir)
+        if (!path) return
+        targetPath = path
+      }
+
+      try {
+        const result = await readAndRenderFile(targetPath)
+        s.history = [{ filePath: result.abs, scrollY: 0, fileName: result.fileName }]
+        s.historyIndex = 0
+        s.filePath = result.abs
+        s.html = result.html
+        s.fileName = result.fileName
+        s.rawText = result.raw
+        s.loadedMtime = result.mtime
+        s.scrollY = scrollY
+        s.lastDir = getFileDir(result.abs)
+        s.error = null
+        s.externallyChanged = false
+        s.dirty = false
+        s.userAckedExternal = false
+        if (!s.workspaceDir) {
+          s.workspaceDir = s.lastDir
+          queueWorkspaceScan(s.lastDir)
+        }
+      } catch (err) {
+        log.error('mdview', `Failed to open: ${targetPath} — ${formatError(err)}`)
+        s.error = formatError(err)
+      }
+    },
+
+    async navigateTo(s: MdviewState, filePath: string, currentScrollY: number) {
+      const { readAndRenderFile, formatError } = await loadHelpers()
+      const basePath = s.filePath
+      try {
+        const result = await readAndRenderFile(filePath, basePath)
+        const history = s.history.map((e, i) =>
+          i === s.historyIndex ? { ...e, scrollY: currentScrollY } : { ...e }
+        )
+        const newIndex = s.historyIndex + 1
+        history.splice(newIndex)
+        history.push({ filePath: result.abs, scrollY: 0, fileName: result.fileName })
+        s.history = history
+        s.historyIndex = newIndex
+        s.filePath = result.abs
+        s.html = result.html
+        s.fileName = result.fileName
+        s.rawText = result.raw
+        s.loadedMtime = result.mtime
+        s.scrollY = 0
+        s.error = null
+        s.externallyChanged = false
+        s.dirty = false
+        s.userAckedExternal = false
+      } catch (err) {
+        log.error('mdview', `Failed to navigate: ${filePath} — ${formatError(err)}`)
+        s.error = formatError(err)
+      }
+    },
+
+    async goBack(s: MdviewState, currentScrollY: number) {
+      const { readAndRenderFile, formatError } = await loadHelpers()
+      const idx = s.historyIndex
+      if (idx <= 0) return
+      const entry = s.history[idx - 1]!
+      const entryPath = entry.filePath
+      const entryScrollY = entry.scrollY
+
+      s.history = s.history.map((e, i) =>
+        i === idx ? { ...e, scrollY: currentScrollY } : { ...e }
+      )
+      s.historyIndex = idx - 1
+
+      try {
+        const result = await readAndRenderFile(entryPath)
+        s.filePath = result.abs
+        s.html = result.html
+        s.fileName = result.fileName
+        s.rawText = result.raw
+        s.loadedMtime = result.mtime
+        s.scrollY = entryScrollY
+        s.error = null
+        s.externallyChanged = false
+        s.dirty = false
+        s.userAckedExternal = false
+      } catch (err) {
+        log.error('mdview', `Failed to go back: ${entryPath} — ${formatError(err)}`)
+        s.error = formatError(err)
+      }
+    },
+
+    async goForward(s: MdviewState, currentScrollY: number) {
+      const { readAndRenderFile, formatError } = await loadHelpers()
+      const idx = s.historyIndex
+      const len = s.history.length
+      if (idx >= len - 1) return
+      const entry = s.history[idx + 1]!
+      const entryPath = entry.filePath
+      const entryScrollY = entry.scrollY
+
+      s.history = s.history.map((e, i) =>
+        i === idx ? { ...e, scrollY: currentScrollY } : { ...e }
+      )
+      s.historyIndex = idx + 1
+
+      try {
+        const result = await readAndRenderFile(entryPath)
+        s.filePath = result.abs
+        s.html = result.html
+        s.fileName = result.fileName
+        s.rawText = result.raw
+        s.loadedMtime = result.mtime
+        s.scrollY = entryScrollY
+        s.error = null
+        s.externallyChanged = false
+        s.dirty = false
+        s.userAckedExternal = false
+      } catch (err) {
+        log.error('mdview', `Failed to go forward: ${entryPath} — ${formatError(err)}`)
+        s.error = formatError(err)
+      }
+    },
+
+    async setWorkspace(s: MdviewState, dir: string) {
+      const { scanTree, watchWorkspace } = await loadHelpers()
+      workspaceWatcherDispose?.()
+      workspaceWatcherDispose = null
+      if (!dir) {
+        s.workspaceDir = ''
+        s.tree = []
+        return
+      }
+      s.workspaceDir = dir
+      s.tree = await scanTree(dir)
+      workspaceWatcherDispose = watchWorkspace(dir, () => {
+        clearTimeout(rescanTimer)
+        rescanTimer = setTimeout(() => {
+          mdview.rescanTree()
+          mdview.checkExternalChange()
+        }, 200) as unknown as number
+      })
+    },
+
+    async rescanTree(s: MdviewState) {
+      if (!s.workspaceDir) return
+      const { scanTree } = await loadHelpers()
+      s.tree = await scanTree(s.workspaceDir)
+    },
+
+    // ── File management (sidebar) ──────────────────────────────────
+
+    clearFsError(s: MdviewState) { s.fsError = null },
+
+    async createFileIn(s: MdviewState, dirPath: string, name: string) {
+      const { createMarkdownFile, scanTree, formatError } = await loadHelpers()
+      s.fsError = null
+      const parent = dirPath || s.workspaceDir
+      if (!insideWorkspace(s, parent)) { s.fsError = 'Folder is outside the workspace'; return }
+      try {
+        const abs = await createMarkdownFile(parent, name)
+        s.tree = await scanTree(s.workspaceDir)
+        queueOpenInEditor(abs)
+      } catch (err) {
+        log.warn('mdview', `Create file "${name}" in ${parent}: ${formatError(err)}`)
+        s.fsError = formatError(err)
+      }
+    },
+
+    async createFolderIn(s: MdviewState, dirPath: string, name: string) {
+      const { createFolder, scanTree, formatError } = await loadHelpers()
+      s.fsError = null
+      const parent = dirPath || s.workspaceDir
+      if (!insideWorkspace(s, parent)) { s.fsError = 'Folder is outside the workspace'; return }
+      try {
+        await createFolder(parent, name)
+        s.tree = await scanTree(s.workspaceDir)
+      } catch (err) {
+        log.warn('mdview', `Create folder "${name}" in ${parent}: ${formatError(err)}`)
+        s.fsError = formatError(err)
+      }
+    },
+
+    async renameEntry(s: MdviewState, path: string, newName: string, isDir: boolean) {
+      const { renamePath, scanTree, formatError } = await loadHelpers()
+      s.fsError = null
+      if (!insideWorkspace(s, path)) { s.fsError = 'Path is outside the workspace'; return }
+      try {
+        const newPath = await renamePath(path, newName, isDir)
+        if (newPath !== path) {
+          const remap = (p: string) =>
+            p === path ? newPath : p.startsWith(path + '/') ? newPath + p.slice(path.length) : p
+          if (remap(s.filePath) !== s.filePath) {
+            s.filePath = remap(s.filePath)
+            s.fileName = baseName(s.filePath)
+          }
+          s.lastDir = remap(s.lastDir)
+          s.history = s.history.map((e) => {
+            const np = remap(e.filePath)
+            return { ...e, filePath: np, fileName: np === e.filePath ? e.fileName : baseName(np) }
+          })
+        }
+        s.tree = await scanTree(s.workspaceDir)
+      } catch (err) {
+        log.warn('mdview', `Rename ${path} → "${newName}": ${formatError(err)}`)
+        s.fsError = formatError(err)
+      }
+    },
+
+    async deleteEntry(s: MdviewState, path: string, isDir: boolean) {
+      const { deletePath, scanTree, formatError } = await loadHelpers()
+      s.fsError = null
+      if (!insideWorkspace(s, path)) { s.fsError = 'Path is outside the workspace'; return }
+      try {
+        await deletePath(path, isDir)
+        if (s.filePath === path || s.filePath.startsWith(path + '/')) {
+          // Open doc was deleted — reset doc state, keep workspace + sidebar.
+          s.filePath = ''
+          s.html = ''
+          s.fileName = ''
+          s.scrollY = 0
+          s.error = null
+          s.history = []
+          s.historyIndex = -1
+          s.rawText = ''
+          s.loadedMtime = 0
+          s.externallyChanged = false
+          s.dirty = false
+          s.userAckedExternal = false
+          s.mode = 'view'
+        }
+        s.tree = await scanTree(s.workspaceDir)
+      } catch (err) {
+        log.warn('mdview', `Delete ${path}: ${formatError(err)}`)
+        s.fsError = formatError(err)
+      }
+    },
+
+    async checkExternalChange(s: MdviewState) {
+      if (!s.filePath) return
+      const { statMtime } = await loadHelpers()
+      const m = await statMtime(s.filePath)
+      if (m <= s.loadedMtime) return
+      // Suppress only the change the user already acked ("Keep my edits"); a
+      // strictly newer on-disk mtime re-surfaces the banner.
+      if (s.userAckedExternal && m <= s.externalMtime) return
+      s.externallyChanged = true
+      s.externalMtime = m
+    },
+
+    async saveEdit(s: MdviewState, text: string, path?: string) {
+      const { writeMarkdownFile, statMtime, renderMd, formatError } = await loadHelpers()
+      // If explicit path provided (file-switch flush), use it. Otherwise use s.filePath.
+      const targetPath = path ?? s.filePath
+      if (!targetPath) return
+      // loadedMtime / userAckedExternal / externallyChanged track the CURRENTLY-viewed
+      // file only. A cross-file flush (navigating away with unsaved edits) must not
+      // consult or mutate them — doing so drops the edits AND corrupts current-file
+      // state with a phantom "changed on disk" banner.
+      const isCurrent = targetPath === s.filePath
+      try {
+        if (isCurrent) {
+          const onDisk = await statMtime(targetPath)
+          if (onDisk > s.loadedMtime && !s.userAckedExternal) {
+            // External change detected during save — mark dirty, don't overwrite.
+            s.externallyChanged = true
+            s.externalMtime = onDisk
+            s.rawText = text
+            s.dirty = true
+            return
+          }
+        }
+        const newMtime = await writeMarkdownFile(targetPath, text)
+        if (isCurrent) {
+          // Only update state for current file's save.
+          s.rawText = text
+          s.html = renderMd(text, s.filePath)
+          s.loadedMtime = newMtime
+          s.dirty = false
+          s.externallyChanged = false
+        }
+      } catch (err) {
+        log.error('mdview', `Save failed: ${targetPath} — ${formatError(err)}`)
+        if (isCurrent) s.error = formatError(err)
+      }
+    },
+
+    async applyExternalReload(s: MdviewState) {
+      if (!s.filePath) return
+      const { readRaw, renderMd, formatError } = await loadHelpers()
+      try {
+        const { raw, mtime } = await readRaw(s.filePath)
+        s.rawText = raw
+        s.html = renderMd(raw, s.filePath)
+        s.loadedMtime = mtime
+        s.externallyChanged = false
+        s.dirty = false
+        s.userAckedExternal = false
+      } catch (err) {
+        log.error('mdview', `Reload failed: ${s.filePath} — ${formatError(err)}`)
+        s.error = formatError(err)
+      }
+    },
+
+    dismissExternalBanner(s: MdviewState) {
+      s.externallyChanged = false
+      s.userAckedExternal = true
+    },
+  },
+
+  onInit(app) {
+    const args = typeof Deno !== 'undefined' ? Deno.args : []
+    const cliArg = args.find((a: string) => !a.startsWith('--'))
+    const state = app.getState() as MdviewState
+
+    if (cliArg) {
+      // Async CLI arg resolution; dispatches when done.
+      ;(async () => {
+        const { resolveCliArg } = await loadHelpers()
+        const { file, dir } = await resolveCliArg(cliArg)
+        if (dir) app.dispatch(closeDocAction())
+        app.dispatch(setWorkspaceAction(dir))
+        if (file) {
+          app.dispatch(requestOpenAction(file, 0))
+        } else {
+          app.dispatch(setSidebarVisibleAction(true))
+        }
+      })()
+      return
+    }
+
+    const target = state.filePath
+    if (target) {
+      const scrollY = state.scrollY ?? 0
+      app.dispatch(requestOpenAction(target, scrollY))
+    }
+    if (state.workspaceDir) {
+      app.dispatch(setWorkspaceAction(state.workspaceDir))
+    }
+  },
+})
+
+// Queue a workspace scan from inside a method (can't dispatch during reduce).
+function queueWorkspaceScan(dir: string) {
+  setTimeout(() => mdview.setWorkspace(dir), 0)
+}
+
+// Open a freshly created file in edit mode (can't dispatch during reduce).
+function queueOpenInEditor(path: string) {
+  setTimeout(async () => {
+    await mdview.requestOpen(path, 0)
+    mdview.setMode('edit')
+  }, 0)
+}
+
+// File-management ops only touch paths inside the open workspace.
+function insideWorkspace(s: MdviewState, p: string): boolean {
+  return !!s.workspaceDir && !!p && (p === s.workspaceDir || p.startsWith(s.workspaceDir + '/'))
+}
+
+const baseName = (p: string) => p.slice(p.lastIndexOf('/') + 1)
