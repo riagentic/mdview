@@ -1,31 +1,17 @@
 import { aio } from 'aio'
-import { initialState } from './state.ts'
-import { reduce } from './reduce.ts'
-import { execute } from './execute.ts'
-import { openFile } from './open.ts'
+import { mdview } from './cell/mdview.ts'
+import { VERSION } from './version.ts'
+// Embed server-only helpers in deno compile (browser bundle starts from App.tsx, never reaches here)
+import './cell/mdview-io.ts'
 
-// first non-flag arg is the markdown file path
-const cliPath = Deno.args.find(a => !a.startsWith('--'))
-
-await aio.run(initialState, {
-  reduce,
-  execute,
-  getDBState: (s) => ({ filePath: s.filePath, scrollY: s.scrollY, zoom: s.zoom }),
-  onStart: async (app) => {
-    const restored = app.getState()
-    const target = cliPath ?? restored.filePath
-    if (!target) return
-    // resume scroll position only when reopening last session
-    const scrollY = !cliPath ? restored.scrollY : 0
-    try {
-      await openFile(app, target, scrollY)
-    } catch {
-      console.error(`Could not read: ${target}`)
-      if (cliPath) Deno.exit(1)
-    }
-  },
+await aio.run({
+  appId: 'mdview',
+  appVersion: VERSION,
+  cells: [mdview],
+  cellDefaults: { ui: 'all' },
+  persist: true,
   ui: {
-    title: 'mdview',
+    title: `mdview v${VERSION}`,
     width: 960,
     height: 720,
     showStatus: false,
