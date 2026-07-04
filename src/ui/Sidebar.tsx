@@ -265,9 +265,8 @@ export default function Sidebar(
   const label = workspaceDir ? workspaceDir.split('/').slice(-2).join('/') : ''
   const ops: Ops = { onSelect, onCreateFile, onCreateFolder, onRename, onDelete }
 
-  // Read the signals so this component subscribes and re-renders on change.
-  void collapsedDirs.value
-  void pendingDelete.value
+  // collapsedDirs/pendingDelete are consumed inside TreeRow — child
+  // subscriptions are independent of parents (AIO-7.5), no parent read needed.
   const ed = editing.value
   const rootCreate = ed && ed.kind !== 'rename' && ed.dir === workspaceDir ? ed : null
 

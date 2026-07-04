@@ -2,6 +2,7 @@
 
 - user friendly md viewer (editor)
 - deno + aio framework app (dep/aio)
+- app uses aio framework correctly using latest api and recommendations 
 
 
 # Meta
