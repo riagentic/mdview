@@ -1,4 +1,5 @@
-import { cell, log } from 'aio'
+import { cell, log, own, schedule } from 'aio'
+import type { CellEffect } from 'aio'
 import type { HistoryEntry, Mode, MdviewState, Theme, TreeNode } from '../type/mdview.ts'
 
 export type { HistoryEntry, Mode, MdviewState, Theme, TreeNode } from '../type/mdview.ts'
@@ -7,21 +8,6 @@ export type { HistoryEntry, Mode, MdviewState, Theme, TreeNode } from '../type/m
 // resolving mdview-io (which uses Deno.*) into the browser bundle.
 const _hp = './mdview-io'
 const loadHelpers = () => import(`${_hp}.ts`)
-
-// onInit self-dispatch (methods use { args: [...] } payload format)
-const requestOpenAction = (filePath = '', scrollY = 0) =>
-  ({ type: 'mdview:requestOpen' as const, payload: { args: [filePath, scrollY] } })
-const setWorkspaceAction = (dir: string) =>
-  ({ type: 'mdview:setWorkspace' as const, payload: { args: [dir] } })
-const closeDocAction = () =>
-  ({ type: 'mdview:closeDoc' as const, payload: { args: [] } })
-const setSidebarVisibleAction = (visible: boolean) =>
-  ({ type: 'mdview:setSidebarVisible' as const, payload: { args: [visible] } })
-
-// Server-only: filesystem watcher lifecycle + rescan debounce timer.
-// Lives at module scope because methods are reducers (no place for resources).
-let workspaceWatcherDispose: (() => void) | null = null
-let rescanTimer: number = 0
 
 // ── Cell ───────────────────────────────────────────────────────────
 
@@ -70,7 +56,7 @@ export const mdview = cell('mdview', {
         requestOpenFolder: 'empty',
         closeDoc: 'empty',
         setWorkspace: 'empty',
-        rescanTree: 'empty',
+        rescanTree: 'empty', fsChanged: 'empty',
         toggleSidebar: 'empty',
         setSidebarVisible: 'empty',
         setSidebarWidth: 'empty',
@@ -85,7 +71,7 @@ export const mdview = cell('mdview', {
         requestOpenFolder: 'viewing',
         setScroll: 'viewing', setZoom: 'viewing', closeDoc: 'empty',
         navigateTo: 'viewing', goBack: 'viewing', goForward: 'viewing',
-        setWorkspace: 'viewing', rescanTree: 'viewing',
+        setWorkspace: 'viewing', rescanTree: 'viewing', fsChanged: 'viewing',
         toggleSidebar: 'viewing', setSidebarVisible: 'viewing',
         setSidebarWidth: 'viewing',
         setMode: 'viewing', saveEdit: 'viewing',
@@ -142,22 +128,13 @@ export const mdview = cell('mdview', {
       s.theme = theme === 'dark' ? 'dark' : 'light'
     },
 
-    async requestOpenFolder(s: MdviewState) {
+    async requestOpenFolder(s: MdviewState): Promise<CellEffect | void> {
       const { folderDialog, scanTree, watchWorkspace } = await loadHelpers()
       const dir = await folderDialog(s.workspaceDir || s.lastDir)
       if (!dir) return
-      workspaceWatcherDispose?.()
-      workspaceWatcherDispose = null
       s.workspaceDir = dir
       s.tree = await scanTree(dir)
       s.sidebarVisible = true
-      workspaceWatcherDispose = watchWorkspace(dir, () => {
-        clearTimeout(rescanTimer)
-        rescanTimer = setTimeout(() => {
-          mdview.rescanTree()
-          mdview.checkExternalChange()
-        }, 200) as unknown as number
-      })
       s.filePath = ''
       s.html = ''
       s.fileName = ''
@@ -170,9 +147,12 @@ export const mdview = cell('mdview', {
       s.mode = 'view'
       s.history = []
       s.historyIndex = -1
+      // Same id ⇒ previous watcher's disposer runs first; auto-disposed on
+      // cell disable and app shutdown (AIO-382).
+      return own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged()))
     },
 
-    async requestOpen(s: MdviewState, filePath = '', scrollY = 0) {
+    async requestOpen(s: MdviewState, filePath = '', scrollY = 0, mode?: Mode): Promise<CellEffect | void> {
       const { readAndRenderFile, fileDialog, getFileDir, formatError } = await loadHelpers()
       s.error = null
 
@@ -198,9 +178,12 @@ export const mdview = cell('mdview', {
         s.externallyChanged = false
         s.dirty = false
         s.userAckedExternal = false
+        if (mode) s.mode = mode
         if (!s.workspaceDir) {
-          s.workspaceDir = s.lastDir
-          queueWorkspaceScan(s.lastDir)
+          const dir = s.lastDir
+          s.workspaceDir = dir
+          // Follow-up dispatch: scan + watch the inferred workspace.
+          return schedule.after('mdview:scan-workspace', 0, mdview.setWorkspace.action(dir))
         }
       } catch (err) {
         log.error('mdview', `Failed to open: ${targetPath} — ${formatError(err)}`)
@@ -300,24 +283,24 @@ export const mdview = cell('mdview', {
       }
     },
 
-    async setWorkspace(s: MdviewState, dir: string) {
-      const { scanTree, watchWorkspace } = await loadHelpers()
-      workspaceWatcherDispose?.()
-      workspaceWatcherDispose = null
+    async setWorkspace(s: MdviewState, dir: string): Promise<CellEffect | void> {
       if (!dir) {
         s.workspaceDir = ''
         s.tree = []
-        return
+        return own.dispose('mdview:watcher')
       }
+      const { scanTree, watchWorkspace } = await loadHelpers()
       s.workspaceDir = dir
       s.tree = await scanTree(dir)
-      workspaceWatcherDispose = watchWorkspace(dir, () => {
-        clearTimeout(rescanTimer)
-        rescanTimer = setTimeout(() => {
-          mdview.rescanTree()
-          mdview.checkExternalChange()
-        }, 200) as unknown as number
-      })
+      return own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged()))
+    },
+
+    // Watcher callback lands here; debounced follow-ups via same-id replace.
+    fsChanged(_s: MdviewState): CellEffect {
+      return [
+        schedule.after('mdview:rescan', 200, mdview.rescanTree.action()),
+        schedule.after('mdview:ext-check', 200, mdview.checkExternalChange.action()),
+      ]
     },
 
     async rescanTree(s: MdviewState) {
@@ -330,7 +313,7 @@ export const mdview = cell('mdview', {
 
     clearFsError(s: MdviewState) { s.fsError = null },
 
-    async createFileIn(s: MdviewState, dirPath: string, name: string) {
+    async createFileIn(s: MdviewState, dirPath: string, name: string): Promise<CellEffect | void> {
       const { createMarkdownFile, scanTree, formatError } = await loadHelpers()
       s.fsError = null
       const parent = dirPath || s.workspaceDir
@@ -338,7 +321,8 @@ export const mdview = cell('mdview', {
       try {
         const abs = await createMarkdownFile(parent, name)
         s.tree = await scanTree(s.workspaceDir)
-        queueOpenInEditor(abs)
+        // Open the fresh file straight into the editor.
+        return schedule.after('mdview:open-created', 0, mdview.requestOpen.action(abs, 0, 'edit'))
       } catch (err) {
         log.warn('mdview', `Create file "${name}" in ${parent}: ${formatError(err)}`)
         s.fsError = formatError(err)
@@ -496,12 +480,12 @@ export const mdview = cell('mdview', {
       ;(async () => {
         const { resolveCliArg } = await loadHelpers()
         const { file, dir } = await resolveCliArg(cliArg)
-        if (dir) app.dispatch(closeDocAction())
-        app.dispatch(setWorkspaceAction(dir))
+        if (dir) app.dispatch(mdview.closeDoc.action())
+        app.dispatch(mdview.setWorkspace.action(dir))
         if (file) {
-          app.dispatch(requestOpenAction(file, 0))
+          app.dispatch(mdview.requestOpen.action(file, 0))
         } else {
-          app.dispatch(setSidebarVisibleAction(true))
+          app.dispatch(mdview.setSidebarVisible.action(true))
         }
       })()
       return
@@ -510,26 +494,13 @@ export const mdview = cell('mdview', {
     const target = state.filePath
     if (target) {
       const scrollY = state.scrollY ?? 0
-      app.dispatch(requestOpenAction(target, scrollY))
+      app.dispatch(mdview.requestOpen.action(target, scrollY))
     }
     if (state.workspaceDir) {
-      app.dispatch(setWorkspaceAction(state.workspaceDir))
+      app.dispatch(mdview.setWorkspace.action(state.workspaceDir))
     }
   },
 })
-
-// Queue a workspace scan from inside a method (can't dispatch during reduce).
-function queueWorkspaceScan(dir: string) {
-  setTimeout(() => mdview.setWorkspace(dir), 0)
-}
-
-// Open a freshly created file in edit mode (can't dispatch during reduce).
-function queueOpenInEditor(path: string) {
-  setTimeout(async () => {
-    await mdview.requestOpen(path, 0)
-    mdview.setMode('edit')
-  }, 0)
-}
 
 // File-management ops only touch paths inside the open workspace.
 function insideWorkspace(s: MdviewState, p: string): boolean {
