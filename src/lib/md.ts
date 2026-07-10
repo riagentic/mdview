@@ -51,8 +51,18 @@ const PURIFY_CONFIG = {
   ALLOWED_URI_REGEXP: /^(?:(?:https?|ftp|mailto|tel|file):|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i,
 }
 
-/** Parse markdown source to sanitized HTML (server-side, with syntax highlighting) */
+/** Strip a leading YAML frontmatter block (`---` … `---`/`...`) so it doesn't
+ *  render as a stray horizontal rule + raw `key: value` text. The opening fence
+ *  must be the first line (a BOM is tolerated); with no closing fence the source
+ *  is returned untouched (a lone leading `---` stays a thematic break). Only the
+ *  rendered view strips it — the editor and on-disk file keep the frontmatter. */
+export function stripFrontmatter(source: string): string {
+  const m = /^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(source)
+  return m ? source.slice(m[0].length) : source
+}
+
+/** Parse markdown source to sanitized HTML (server-side, with syntax highlighting). */
 export function renderMarkdown(source: string): string {
-  const raw = marked.parse(source) as string
+  const raw = marked.parse(stripFrontmatter(source)) as string
   return DOMPurify.sanitize(raw, PURIFY_CONFIG)
 }

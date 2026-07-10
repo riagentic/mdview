@@ -11,6 +11,9 @@ export type Mode = 'view' | 'edit'
 
 export type Theme = 'light' | 'dark'
 
+/** One line-level hit from a workspace-wide content search. */
+export type SearchHit = { path: string; fileName: string; line: number; text: string }
+
 export type MdviewState = {
   filePath: string
   scrollY: number
@@ -25,6 +28,7 @@ export type MdviewState = {
   workspaceDir: string
   sidebarVisible: boolean
   sidebarWidth: number
+  outlineWidth: number
   tree: TreeNode[]
   fsError: string | null
 
@@ -36,4 +40,9 @@ export type MdviewState = {
   externalMtime: number
   dirty: boolean
   userAckedExternal: boolean
+  /** True while a remote doc is being fetched (drives the loading indicator). */
+  loading: boolean
+  /** Current workspace-search query ('' = not searching) and its hits. */
+  searchQuery: string
+  searchResults: SearchHit[]
 }
