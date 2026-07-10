@@ -1,5 +1,7 @@
 import { afterRender, batch, fade, onCleanup, onMount, Show, signal, Transition, useRef } from 'aio/air'
 import { mdview } from '../cell/mdview.ts'
+import { classifyLink, tagLinks } from '../lib/links.ts'
+import { extractHeadings } from '../lib/outline.ts'
 import { VERSION } from '../version.ts'
 import Sidebar from './Sidebar.tsx'
 import Editor from './Editor.tsx'
@@ -10,6 +12,7 @@ const searchOpen = signal(false, 'searchOpen')
 const searchQuery = signal('', 'searchQuery')
 const matchCount = signal(0, 'matchCount')
 const currentMatch = signal(-1, 'currentMatch')
+const outlineOpen = signal(false, 'outlineOpen')
 
 // Anchor to scroll to after the next cross-file navigation commits. UI-only;
 // consumed and cleared by Article.afterRender once the new DOM is live.
@@ -22,13 +25,107 @@ function closeSearch() {
 
 // ── Pure helpers ──────────────────────────────────────────────────
 
-function processLinks(root: HTMLElement): void {
-  for (const a of root.querySelectorAll<HTMLAnchorElement>('a[href]')) {
-    const href = a.getAttribute('href')!
-    if (href.startsWith('http') || href.startsWith('mailto:')) continue
-    a.setAttribute('data-href', href)
-    a.removeAttribute('href')
-    a.style.cursor = 'pointer'
+// Strip href → data-href + data-link-kind on every rendered link. This is the
+// freeze guard (a live http href lets Electron navigate the window → aio
+// SPA-routes the routerless viewer to a bogus path → white-screen) plus the
+// marker source. Pure DOM logic lives in tagLinks so it's unit-tested; cursor is
+// in CSS (.markdown-body a[data-href]).
+const processLinks = tagLinks
+
+// ── Outline (TOC) ─────────────────────────────────────────────────
+
+function scrollToHeading(id: string): void {
+  if (!id) return
+  const el = document.querySelector(`.content-scroll [id="${CSS.escape(id)}"]`)
+  el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function Outline() {
+  const headings = extractHeadings(mdview.html) // reactive on mdview.html
+  const panelRef = useRef<HTMLElement>(null!)
+  const draggingRef = useRef(false)
+
+  // Resizable like the sidebar, but the panel is right-anchored, so the handle is
+  // on its LEFT edge and width grows as the pointer moves left.
+  onMount(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!draggingRef.current || !panelRef.current) return
+      const rect = panelRef.current.getBoundingClientRect()
+      const next = Math.max(160, Math.min(560, rect.right - e.clientX))
+      panelRef.current.style.width = `${next}px`
+    }
+    const onUp = () => {
+      if (!draggingRef.current) return
+      draggingRef.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      if (panelRef.current) {
+        const w = parseInt(panelRef.current.style.width, 10)
+        if (!isNaN(w)) mdview.setOutlineWidth(w)
+      }
+    }
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
+    onCleanup(() => {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
+    })
+  })
+
+  const startDrag = (e: PointerEvent) => {
+    e.preventDefault()
+    draggingRef.current = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  return (
+    <nav ref={panelRef} className="outline-panel" style={{ width: `${mdview.outlineWidth}px` }} aria-label="Document outline">
+      <div className="outline-resizer" onPointerDown={startDrag} />
+      <div className="outline-header">Outline</div>
+      {headings.length === 0
+        ? <div className="outline-empty">No headings</div>
+        : (
+          <ul className="outline-list">
+            {headings.map((h) => (
+              <li
+                className={h.id ? 'outline-item' : 'outline-item outline-item-noid'}
+                data-level={h.level}
+                style={{ paddingLeft: `${(h.level - 1) * 12 + 12}px` }}
+                title={h.text}
+                onClick={() => scrollToHeading(h.id)}
+              >{h.text}</li>
+            ))}
+          </ul>
+        )}
+    </nav>
+  )
+}
+
+// Inject a hover "Copy" button into each rendered code block. Idempotent per
+// render; the button copies the <code> text (not the button's own label).
+function addCopyButtons(root: HTMLElement): void {
+  for (const pre of root.querySelectorAll('pre')) {
+    if (pre.querySelector('.code-copy-btn')) continue
+    const code = pre.querySelector('code')
+    if (!code) continue
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'code-copy-btn'
+    btn.textContent = 'Copy'
+    btn.setAttribute('aria-label', 'Copy code')
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const done = (label: string, ok: boolean) => {
+        btn.textContent = label
+        btn.classList.toggle('copied', ok)
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied') }, 1200)
+      }
+      navigator.clipboard?.writeText(code.textContent ?? '')
+        .then(() => done('Copied!', true))
+        .catch(() => done('Failed', false))
+    })
+    pre.appendChild(btn)
   }
 }
 
@@ -99,6 +196,7 @@ function Article({ html, zoom }: { html: string; zoom: number }) {
       const count = q ? highlightMatches(el, q) : 0
       batch(() => { matchCount.set(count); currentMatch.set(count > 0 ? 0 : -1) })
       if (count > 0) scrollToMatch(0)
+      addCopyButtons(el) // after highlight so the "Copy" label isn't match-wrapped
 
       const anchor = pendingAnchor.peek()
       if (anchor) {
@@ -237,7 +335,8 @@ export default function MdviewPage() {
           case 'b': case 'B':
             if (mdview.workspaceDir) { e.preventDefault(); mdview.toggleSidebar() } break
           case 'e': case 'E':
-            if (mdview.filePath) { e.preventDefault(); mdview.setMode(mdview.mode === 'edit' ? 'view' : 'edit') } break
+            // Remote docs are read-only — no edit mode.
+            if (mdview.filePath && !/^https?:\/\//i.test(mdview.filePath)) { e.preventDefault(); mdview.setMode(mdview.mode === 'edit' ? 'view' : 'edit') } break
           case '+': case '=':
             e.preventDefault(); zoomBy(10); break
           case '-':
@@ -274,22 +373,26 @@ export default function MdviewPage() {
       const link = (e.target as HTMLElement).closest('a')
       if (!link || !link.closest('.markdown-body')) return
       const href = link.getAttribute('data-href') ?? link.getAttribute('href')
-      if (!href || href.startsWith('http') || href.startsWith('mailto:')) return
+      if (!href) return
 
-      const contentEl = link.closest('.content-scroll') as HTMLElement | null
+      // Every in-app link is handled here — never let the click navigate the
+      // window (an http nav becomes an aio SPA route to a bogus path → freeze).
+      e.preventDefault()
+      const action = classifyLink(href)
 
-      if (href.startsWith('#')) {
-        e.preventDefault()
+      if (action === 'anchor') {
+        const contentEl = link.closest('.content-scroll') as HTMLElement | null
         const target = contentEl?.querySelector(`[id="${CSS.escape(href.slice(1))}"]`)
         target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
         return
       }
+      if (action === 'external') { mdview.openExternal(href); return } // web/mail → OS browser
 
-      e.preventDefault()
-      const scrollY = getScrollY()
+      // open: local path, relative ref (resolved against the doc, local or
+      // remote), or a remote .md URL — navigateTo/readAndRenderFile handles all.
       const hashIdx = href.indexOf('#')
       if (hashIdx >= 0) pendingAnchor.set(href.slice(hashIdx + 1))
-      mdview.navigateTo(href, scrollY)
+      mdview.navigateTo(href, getScrollY())
     }
 
     globalThis.addEventListener('beforeunload', handleBeforeUnload)
@@ -351,6 +454,9 @@ export default function MdviewPage() {
         workspaceDir={mdview.workspaceDir}
         width={mdview.sidebarWidth}
         fsError={mdview.fsError}
+        searchQuery={mdview.searchQuery}
+        searchResults={mdview.searchResults}
+        onSearch={(q: string) => mdview.searchWorkspace(q)}
         onSelect={onSelectFile}
         onResize={onResizeSidebar}
         onCreateFile={(dir: string, name: string) => mdview.createFileIn(dir, name)}
@@ -436,6 +542,7 @@ export default function MdviewPage() {
   const isSearchOpen = searchOpen.value
   const mode = mdview.mode
   const hasWorkspace = !!mdview.workspaceDir
+  const isRemoteDoc = /^https?:\/\//i.test(mdview.filePath) // read-only: no edit
 
   return (
     <div className="viewer">
@@ -451,23 +558,36 @@ export default function MdviewPage() {
           title={canGoBack ? `Back: ${mdview.history[mdview.historyIndex - 1]?.fileName}` : 'No history'}>←</button>
         <button type="button" onClick={() => mdview.goForward(getScrollY())} className="toolbar-btn toolbar-btn-nav" disabled={!canGoForward}
           title={canGoForward ? `Forward: ${mdview.history[mdview.historyIndex + 1]?.fileName}` : 'No forward history'}>→</button>
-        <span className="file-name">{mdview.fileName}{mdview.dirty ? ' •' : ''}</span>
-        <div className="mode-toggle" role="group" aria-label="Mode">
-          <button
-            type="button"
-            className={mode === 'view' ? 'mode-btn active' : 'mode-btn'}
-            onClick={() => mdview.setMode('view')}
-            title="View (Ctrl+E toggles)"
-            aria-label="View mode"
-          >👁</button>
-          <button
-            type="button"
-            className={mode === 'edit' ? 'mode-btn active' : 'mode-btn'}
-            onClick={() => mdview.setMode('edit')}
-            title="Edit (Ctrl+E toggles)"
-            aria-label="Edit mode"
-          >✏️</button>
-        </div>
+        <span className="file-name">{mdview.fileName}{mdview.dirty ? ' •' : ''}{isRemoteDoc ? ' ↗' : ''}</span>
+        {isRemoteDoc ? null : (
+          <div className="mode-toggle" role="group" aria-label="Mode">
+            <button
+              type="button"
+              className={mode === 'view' ? 'mode-btn active' : 'mode-btn'}
+              onClick={() => mdview.setMode('view')}
+              title="View (Ctrl+E toggles)"
+              aria-label="View mode"
+            >👁</button>
+            <button
+              type="button"
+              className={mode === 'edit' ? 'mode-btn active' : 'mode-btn'}
+              onClick={() => mdview.setMode('edit')}
+              title="Edit (Ctrl+E toggles)"
+              aria-label="Edit mode"
+            >✏️</button>
+          </div>
+        )}
+        {mode === 'view'
+          ? (
+            <button
+              type="button"
+              onClick={() => outlineOpen.set(!outlineOpen.value)}
+              className={outlineOpen.value ? 'toolbar-btn toolbar-btn-toggle active' : 'toolbar-btn toolbar-btn-toggle'}
+              title="Toggle outline"
+              aria-label="Toggle document outline"
+            >⧉</button>
+          )
+          : null}
         <button type="button" onClick={() => mdview.requestOpen('', getScrollY())} className="toolbar-btn toolbar-btn-toggle" title="Open file (Ctrl+O)" aria-label="Open file">📄</button>
         <button type="button" onClick={() => mdview.requestOpenFolder()} className="toolbar-btn toolbar-btn-toggle" title="Open folder" aria-label="Open folder">📁</button>
         <button
@@ -483,6 +603,13 @@ export default function MdviewPage() {
       <div className="viewer-row">
         {sidebar}
         <div className="main-pane">
+          <Show when={mdview.loading}>
+            {() => (
+              <div className="loading-bar" role="status" aria-live="polite">
+                <span className="loading-spinner" aria-hidden="true" />Loading…
+              </div>
+            )}
+          </Show>
           <Show when={mdview.externallyChanged}>
             {() => <ExternalChangeBanner />}
           </Show>
@@ -511,6 +638,7 @@ export default function MdviewPage() {
               />
             )}
         </div>
+        {mode === 'view' && outlineOpen.value ? <Outline /> : null}
       </div>
       <Show when={zoom !== 100}>
         {() => <div className="zoom-badge">{zoom}%</div>}

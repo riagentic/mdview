@@ -7,5 +7,6 @@ data.kv
 /log/
 /test/
 /telemetry-id
+.aio/
 .aio.log
 .*.swp

@@ -377,6 +377,29 @@ mark.search-active {
   text-decoration: underline;
 }
 
+/* Rendered links have their href stripped to data-href (see tagLinks) — keep the
+   pointer cursor they'd otherwise get from being a hyperlink. */
+.markdown-body a[data-href] {
+  cursor: pointer;
+}
+
+/* Link-kind markers — a small trailing glyph on links that leave the app or hit
+   the network, so a destination reads at a glance. Local/relative links and
+   in-document anchors stay unmarked. Set by processLinks() as data-link-kind;
+   the glyph inherits the link color (works in both themes) and stays subtle. */
+.markdown-body a[data-link-kind="web"]::after,
+.markdown-body a[data-link-kind="remote-md"]::after,
+.markdown-body a[data-link-kind="mail"]::after {
+  margin-left: 0.15em;
+  font-size: 0.85em;
+  opacity: 0.6;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+.markdown-body a[data-link-kind="web"]::after { content: "\2197\FE0E"; }       /* ↗ external page */
+.markdown-body a[data-link-kind="remote-md"]::after { content: "\2913"; }        /* ⤓ remote .md, opens in-app */
+.markdown-body a[data-link-kind="mail"]::after { content: "\2709\FE0E"; }        /* ✉ mail/tel */
+
 /* Images */
 .markdown-body img {
   max-width: 100%;
@@ -676,6 +699,111 @@ mark.search-active {
   min-height: 0;
 }
 
+/* ── Remote-fetch loading bar ────────────────────────────── */
+
+.loading-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: #57606a;
+  background: #f6f8fa;
+  border-bottom: 1px solid #d0d7de;
+}
+.loading-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid #d0d7de;
+  border-top-color: #0969da;
+  border-radius: 50%;
+  animation: mdview-spin 0.7s linear infinite;
+}
+@keyframes mdview-spin { to { transform: rotate(360deg); } }
+[data-theme="dark"] .loading-bar { color: #8b949e; background: #0d1117; border-bottom-color: #30363d; }
+[data-theme="dark"] .loading-spinner { border-color: #30363d; border-top-color: #58a6ff; }
+
+/* ── Copy-code button ────────────────────────────────────── */
+
+.markdown-body pre { position: relative; }
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
+  color: #57606a;
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.markdown-body pre:hover .code-copy-btn,
+.code-copy-btn:focus-visible { opacity: 1; }
+.code-copy-btn:hover { background: #f3f4f6; }
+.code-copy-btn.copied { color: #1a7f37; border-color: #1a7f37; opacity: 1; }
+[data-theme="dark"] .code-copy-btn { color: #8b949e; background: #161b22; border-color: #30363d; }
+[data-theme="dark"] .code-copy-btn:hover { background: #21262d; }
+[data-theme="dark"] .code-copy-btn.copied { color: #3fb950; border-color: #3fb950; }
+
+/* ── Outline (TOC) panel ─────────────────────────────────── */
+
+.outline-panel {
+  position: relative;
+  flex: 0 0 auto;
+  overflow-y: auto;
+  border-left: 1px solid #d0d7de;
+  background: #f6f8fa;
+  padding: 6px 0 16px;
+  font-size: 13px;
+}
+.outline-resizer {
+  position: absolute;
+  top: 0;
+  left: -2px;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.outline-resizer:hover { background: #0969da40; }
+[data-theme="dark"] .outline-resizer:hover { background: rgba(56, 139, 253, 0.4); }
+.outline-header {
+  padding: 6px 12px;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #57606a;
+}
+.outline-list { list-style: none; margin: 0; padding: 0; }
+.outline-item {
+  padding: 4px 12px;
+  cursor: pointer;
+  color: #24292f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-left: 2px solid transparent;
+}
+.outline-item:hover { background: #eaeef2; border-left-color: #0969da; }
+.outline-item[data-level="1"] { font-weight: 600; }
+.outline-item-noid { color: #8c959f; cursor: default; }
+.outline-item-noid:hover { background: transparent; border-left-color: transparent; }
+.outline-empty { padding: 8px 12px; color: #8c959f; font-style: italic; }
+
+[data-theme="dark"] .outline-panel { background: #0d1117; border-left-color: #30363d; }
+[data-theme="dark"] .outline-header { color: #8b949e; }
+[data-theme="dark"] .outline-item { color: #c9d1d9; }
+[data-theme="dark"] .outline-item:hover { background: #161b22; border-left-color: #58a6ff; }
+[data-theme="dark"] .outline-item-noid { color: #6e7681; }
+[data-theme="dark"] .outline-item-noid:hover { background: transparent; border-left-color: transparent; }
+[data-theme="dark"] .outline-empty { color: #6e7681; }
+
 /* ── Sidebar ─────────────────────────────────────────────── */
 
 .sidebar {
@@ -721,6 +849,66 @@ mark.search-active {
   font-size: 13px;
   color: #8c959f;
 }
+
+/* ── Sidebar workspace search ─────────────────────────────── */
+
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #d0d7de;
+}
+.sidebar-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #24292f;
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  outline: none;
+}
+.sidebar-search-input:focus { border-color: #0969da; }
+.search-results { list-style: none; margin: 0; padding: 4px 0; }
+.search-hit {
+  padding: 4px 10px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  overflow: hidden;
+}
+.search-hit:hover { background: #eaeef2; }
+.search-hit.active { border-left-color: #0969da; background: #ddf4ff; }
+.search-hit-file {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #24292f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-hit-line { font-weight: 400; color: #8c959f; }
+.search-hit-text {
+  display: block;
+  font-size: 12px;
+  color: #57606a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+[data-theme="dark"] .sidebar-search { border-bottom-color: #30363d; }
+[data-theme="dark"] .sidebar-search-input { color: #c9d1d9; background: #0d1117; border-color: #30363d; }
+[data-theme="dark"] .sidebar-search-input:focus { border-color: #58a6ff; }
+[data-theme="dark"] .search-hit:hover { background: #161b22; }
+[data-theme="dark"] .search-hit.active { background: #1c2b3a; border-left-color: #58a6ff; }
+[data-theme="dark"] .search-hit-file { color: #c9d1d9; }
+[data-theme="dark"] .search-hit-line { color: #6e7681; }
+[data-theme="dark"] .search-hit-text { color: #8b949e; }
 
 .sidebar-tree,
 .sidebar-dir-children {

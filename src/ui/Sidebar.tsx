@@ -1,5 +1,5 @@
 import { onCleanup, onMount, signal, useRef } from 'aio/air'
-import type { TreeNode } from '../type/mdview.ts'
+import type { SearchHit, TreeNode } from '../type/mdview.ts'
 
 type Props = {
   tree: TreeNode[]
@@ -7,6 +7,9 @@ type Props = {
   workspaceDir: string
   width: number
   fsError: string | null
+  searchQuery: string
+  searchResults: SearchHit[]
+  onSearch: (query: string) => void
   onSelect: (path: string) => void
   onResize: (px: number) => void
   onCreateFile: (dir: string, name: string) => void
@@ -225,10 +228,24 @@ function TreeRow({ node, currentPath, ops, depth }: TreeRowProps) {
 }
 
 export default function Sidebar(
-  { tree, currentPath, workspaceDir, width, fsError, onSelect, onResize, onCreateFile, onCreateFolder, onRename, onDelete, onDismissError }: Props,
+  { tree, currentPath, workspaceDir, width, fsError, searchQuery, searchResults, onSearch, onSelect, onResize, onCreateFile, onCreateFolder, onRename, onDelete, onDismissError }: Props,
 ) {
   const rootRef = useRef<HTMLDivElement>(null!)
   const draggingRef = useRef(false)
+  const searchRef = useRef<HTMLInputElement>(null!)
+  const searchTimer = useRef<number | undefined>(undefined)
+
+  // Debounce keystrokes so we don't grep the workspace on every character.
+  const doSearch = (v: string) => {
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => onSearch(v), 200) as unknown as number
+  }
+  const clearSearch = () => {
+    clearTimeout(searchTimer.current)
+    if (searchRef.current) searchRef.current.value = ''
+    onSearch('')
+    searchRef.current?.focus()
+  }
 
   onMount(() => {
     const onMove = (e: PointerEvent) => {
@@ -285,16 +302,51 @@ export default function Sidebar(
           <button type="button" className="sidebar-action-btn" title="Dismiss" onClick={onDismissError}>✕</button>
         </div>
       )}
+      <div className="sidebar-search">
+        <input
+          ref={searchRef}
+          type="search"
+          className="sidebar-search-input"
+          placeholder="Search files…"
+          aria-label="Search workspace files"
+          onInput={(e) => doSearch((e.target as HTMLInputElement).value)}
+        />
+        {searchQuery ? <button type="button" className="sidebar-action-btn" title="Clear search" onClick={clearSearch}>✕</button> : null}
+      </div>
       <div className="sidebar-scroll">
-        {rootCreate && <CreateRow kind={rootCreate.kind} dir={workspaceDir} depth={0} ops={ops} />}
-        {tree.length === 0
-          ? (!rootCreate && <div className="sidebar-empty">No markdown files</div>)
+        {searchQuery
+          ? (
+            searchResults.length === 0
+              ? <div className="sidebar-empty">No matches</div>
+              : (
+                <ul className="search-results">
+                  {searchResults.map((h) => (
+                    <li
+                      key={`${h.path}:${h.line}`}
+                      className={h.path === currentPath ? 'search-hit active' : 'search-hit'}
+                      title={`${h.path}:${h.line}`}
+                      onClick={() => onSelect(h.path)}
+                    >
+                      <span className="search-hit-file">{h.fileName}<span className="search-hit-line">:{h.line}</span></span>
+                      <span className="search-hit-text">{h.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              )
+          )
           : (
-            <ul className="sidebar-tree">
-              {tree.map((n) => (
-                <TreeRow key={n.path} node={n} currentPath={currentPath} ops={ops} depth={0} />
-              ))}
-            </ul>
+            <>
+              {rootCreate && <CreateRow kind={rootCreate.kind} dir={workspaceDir} depth={0} ops={ops} />}
+              {tree.length === 0
+                ? (!rootCreate && <div className="sidebar-empty">No markdown files</div>)
+                : (
+                  <ul className="sidebar-tree">
+                    {tree.map((n) => (
+                      <TreeRow key={n.path} node={n} currentPath={currentPath} ops={ops} depth={0} />
+                    ))}
+                  </ul>
+                )}
+            </>
           )}
       </div>
       <div className="sidebar-resizer" onPointerDown={startDrag} />

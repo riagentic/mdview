@@ -1,13 +1,18 @@
 import { cell, log, own, schedule } from 'aio'
 import type { CellEffect } from 'aio'
-import type { HistoryEntry, Mode, MdviewState, Theme, TreeNode } from '../type/mdview.ts'
+import type { HistoryEntry, Mode, MdviewState, SearchHit, Theme, TreeNode } from '../type/mdview.ts'
 
-export type { HistoryEntry, Mode, MdviewState, Theme, TreeNode } from '../type/mdview.ts'
+export type { HistoryEntry, Mode, MdviewState, SearchHit, Theme, TreeNode } from '../type/mdview.ts'
 
 // Server-only helpers. Template-literal path prevents esbuild from statically
 // resolving mdview-io (which uses Deno.*) into the browser bundle.
 const _hp = './mdview-io'
 const loadHelpers = () => import(`${_hp}.ts`)
+
+// http(s) docs are read-only: no local dir, watcher, or mtime. Kept inline (pure,
+// browser-safe) so guards don't need the server-only helpers. Mirrors
+// isRemoteUrl in mdview-io.ts.
+const isRemote = (p: string): boolean => /^https?:\/\//i.test(p)
 
 // ── Cell ───────────────────────────────────────────────────────────
 
@@ -29,6 +34,7 @@ export const mdview = cell('mdview', {
     workspaceDir: '',
     sidebarVisible: false,
     sidebarWidth: 260,
+    outlineWidth: 240,
     tree: [] as TreeNode[],
     fsError: null as string | null,
 
@@ -39,12 +45,16 @@ export const mdview = cell('mdview', {
     externalMtime: 0,
     dirty: false,
     userAckedExternal: false,
+    loading: false,
+    searchQuery: '',
+    searchResults: [] as SearchHit[],
   } satisfies MdviewState,
 
   persist: {
     exclude: [
       'html', 'fileName', 'error', 'history', 'historyIndex',
       'tree', 'fsError', 'rawText', 'loadedMtime', 'externallyChanged', 'externalMtime', 'dirty', 'userAckedExternal',
+      'loading', 'searchQuery', 'searchResults',
     ],
   },
 
@@ -59,8 +69,10 @@ export const mdview = cell('mdview', {
         rescanTree: 'empty', fsChanged: 'empty',
         toggleSidebar: 'empty',
         setSidebarVisible: 'empty',
-        setSidebarWidth: 'empty',
+        setSidebarWidth: 'empty', setOutlineWidth: 'empty',
         checkExternalChange: 'empty',
+        openExternal: 'empty',
+        searchWorkspace: 'empty', clearSearch: 'empty',
         setMode: 'empty',
         toggleTheme: 'empty', setTheme: 'empty',
         createFileIn: 'empty', createFolderIn: 'empty',
@@ -73,7 +85,9 @@ export const mdview = cell('mdview', {
         navigateTo: 'viewing', goBack: 'viewing', goForward: 'viewing',
         setWorkspace: 'viewing', rescanTree: 'viewing', fsChanged: 'viewing',
         toggleSidebar: 'viewing', setSidebarVisible: 'viewing',
-        setSidebarWidth: 'viewing',
+        setSidebarWidth: 'viewing', setOutlineWidth: 'viewing',
+        openExternal: 'viewing',
+        searchWorkspace: 'viewing', clearSearch: 'viewing',
         setMode: 'viewing', saveEdit: 'viewing',
         toggleTheme: 'viewing', setTheme: 'viewing',
         applyExternalReload: 'viewing', dismissExternalBanner: 'viewing',
@@ -87,6 +101,17 @@ export const mdview = cell('mdview', {
   methods: {
     setScroll(s: MdviewState, y: number) { s.scrollY = y },
     setZoom(s: MdviewState, zoom: number) { s.zoom = zoom },
+
+    // Hand a web/mail link to the system browser (server spawns xdg-open, like
+    // the file dialogs). Pure side effect — no state change.
+    async openExternal(_s: MdviewState, url: string) {
+      const { openExternalUrl, formatError } = await loadHelpers()
+      try {
+        await openExternalUrl(url)
+      } catch (err) {
+        log.warn('mdview', `openExternal ${url}: ${formatError(err)}`)
+      }
+    },
 
     closeDoc(s: MdviewState) {
       s.filePath = ''
@@ -114,6 +139,10 @@ export const mdview = cell('mdview', {
 
     setSidebarWidth(s: MdviewState, px: number) {
       s.sidebarWidth = Math.max(160, Math.min(640, Math.round(px)))
+    },
+
+    setOutlineWidth(s: MdviewState, px: number) {
+      s.outlineWidth = Math.max(160, Math.min(560, Math.round(px)))
     },
 
     setMode(s: MdviewState, mode: Mode) {
@@ -163,8 +192,12 @@ export const mdview = cell('mdview', {
         targetPath = path
       }
 
+      // Show the loading indicator while a remote doc is fetched (aio commits the
+      // draft at this await boundary, so the flag renders before the fetch returns).
+      if (isRemote(targetPath)) s.loading = true
       try {
         const result = await readAndRenderFile(targetPath)
+        s.loading = false
         s.history = [{ filePath: result.abs, scrollY: 0, fileName: result.fileName }]
         s.historyIndex = 0
         s.filePath = result.abs
@@ -173,19 +206,28 @@ export const mdview = cell('mdview', {
         s.rawText = result.raw
         s.loadedMtime = result.mtime
         s.scrollY = scrollY
-        s.lastDir = getFileDir(result.abs)
         s.error = null
         s.externallyChanged = false
         s.dirty = false
         s.userAckedExternal = false
         if (mode) s.mode = mode
-        if (!s.workspaceDir) {
-          const dir = s.lastDir
-          s.workspaceDir = dir
-          // Follow-up dispatch: scan + watch the inferred workspace.
-          return schedule.after('mdview:scan-workspace', 0, mdview.setWorkspace.action(dir))
+        // Remote docs are read-only and have no local dir: force view mode and
+        // don't touch lastDir or infer a workspace (a URL-derived dir would be
+        // bogus, and watching it is what wedged the app).
+        if (isRemote(result.abs)) {
+          s.mode = 'view'
+        } else {
+          s.lastDir = getFileDir(result.abs)
+          if (!s.workspaceDir) {
+            const dir = s.lastDir
+            s.workspaceDir = dir
+            // Follow-up dispatch: scan + watch the inferred workspace. 1ms ≈ next
+            // tick — defers out of this method; aio rejects a 0ms delay.
+            return schedule.after('mdview:scan-workspace', 1, mdview.setWorkspace.action(dir))
+          }
         }
       } catch (err) {
+        s.loading = false
         log.error('mdview', `Failed to open: ${targetPath} — ${formatError(err)}`)
         s.error = formatError(err)
       }
@@ -194,8 +236,11 @@ export const mdview = cell('mdview', {
     async navigateTo(s: MdviewState, filePath: string, currentScrollY: number) {
       const { readAndRenderFile, formatError } = await loadHelpers()
       const basePath = s.filePath
+      // Remote target = an http URL, or a relative link inside a remote doc.
+      if (isRemote(filePath) || isRemote(basePath)) s.loading = true
       try {
         const result = await readAndRenderFile(filePath, basePath)
+        s.loading = false
         const history = s.history.map((e, i) =>
           i === s.historyIndex ? { ...e, scrollY: currentScrollY } : { ...e }
         )
@@ -215,6 +260,7 @@ export const mdview = cell('mdview', {
         s.dirty = false
         s.userAckedExternal = false
       } catch (err) {
+        s.loading = false
         log.error('mdview', `Failed to navigate: ${filePath} — ${formatError(err)}`)
         s.error = formatError(err)
       }
@@ -284,12 +330,21 @@ export const mdview = cell('mdview', {
     },
 
     async setWorkspace(s: MdviewState, dir: string): Promise<CellEffect | void> {
-      if (!dir) {
+      // A remote URL is never a workspace — clear any watcher rather than trying
+      // to scan/watch a bogus local path (defensive: resolveCliArg already blocks it).
+      if (!dir || isRemote(dir)) {
         s.workspaceDir = ''
         s.tree = []
         return own.dispose('mdview:watcher')
       }
-      const { scanTree, watchWorkspace } = await loadHelpers()
+      const { scanTree, watchWorkspace, dirExists } = await loadHelpers()
+      // Drop a workspace that no longer exists (moved/deleted, or a bogus path
+      // left by the pre-fix URL bug) rather than scanning + watching a dead dir.
+      if (!(await dirExists(dir))) {
+        s.workspaceDir = ''
+        s.tree = []
+        return own.dispose('mdview:watcher')
+      }
       s.workspaceDir = dir
       s.tree = await scanTree(dir)
       return own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged()))
@@ -309,6 +364,24 @@ export const mdview = cell('mdview', {
       s.tree = await scanTree(s.workspaceDir)
     },
 
+    // Workspace-wide content search (sidebar). Empty query clears results.
+    async searchWorkspace(s: MdviewState, query: string) {
+      s.searchQuery = query
+      if (!query.trim() || !s.workspaceDir) {
+        s.searchResults = []
+        return
+      }
+      const { searchWorkspace } = await loadHelpers()
+      const results = await searchWorkspace(s.workspaceDir, query)
+      // Ignore stale responses: a newer keystroke already changed the query.
+      if (s.searchQuery === query) s.searchResults = results
+    },
+
+    clearSearch(s: MdviewState) {
+      s.searchQuery = ''
+      s.searchResults = []
+    },
+
     // ── File management (sidebar) ──────────────────────────────────
 
     clearFsError(s: MdviewState) { s.fsError = null },
@@ -321,8 +394,9 @@ export const mdview = cell('mdview', {
       try {
         const abs = await createMarkdownFile(parent, name)
         s.tree = await scanTree(s.workspaceDir)
-        // Open the fresh file straight into the editor.
-        return schedule.after('mdview:open-created', 0, mdview.requestOpen.action(abs, 0, 'edit'))
+        // Open the fresh file straight into the editor. 1ms ≈ next tick — defers
+        // out of this method; aio rejects a 0ms delay.
+        return schedule.after('mdview:open-created', 1, mdview.requestOpen.action(abs, 0, 'edit'))
       } catch (err) {
         log.warn('mdview', `Create file "${name}" in ${parent}: ${formatError(err)}`)
         s.fsError = formatError(err)
@@ -399,7 +473,7 @@ export const mdview = cell('mdview', {
     },
 
     async checkExternalChange(s: MdviewState) {
-      if (!s.filePath) return
+      if (!s.filePath || isRemote(s.filePath)) return
       const { statMtime } = await loadHelpers()
       const m = await statMtime(s.filePath)
       if (m <= s.loadedMtime) return
@@ -415,6 +489,9 @@ export const mdview = cell('mdview', {
       // If explicit path provided (file-switch flush), use it. Otherwise use s.filePath.
       const targetPath = path ?? s.filePath
       if (!targetPath) return
+      // Remote docs have no local file to write back to — drop the edit silently
+      // (the editor is view-only for them; this only guards a stray flush).
+      if (isRemote(targetPath)) return
       // loadedMtime / userAckedExternal / externallyChanged track the CURRENTLY-viewed
       // file only. A cross-file flush (navigating away with unsaved edits) must not
       // consult or mutate them — doing so drops the edits AND corrupts current-file

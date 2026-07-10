@@ -1,15 +1,91 @@
 import { log } from 'aio'
 import { basename, dirname, isAbsolute, join, resolve } from '@std/path'
 import { renderMarkdown } from '../lib/md.ts'
-import type { TreeNode } from '../type/mdview.ts'
+import type { SearchHit, TreeNode } from '../type/mdview.ts'
 
-/** Read a markdown file, render to HTML. Server-side only — browser never calls this. */
+/** True for absolute http(s) URLs — the only remote scheme mdview opens. */
+export function isRemoteUrl(s: string): boolean {
+  return /^https?:\/\//i.test(s)
+}
+
+// Remote-fetch guards: a bad or slow URL must fail fast (never hang the open
+// dispatch — that was the freeze), and an oversized body must not exhaust memory
+// or bloat the state broadcast.
+const REMOTE_MAX_BYTES = 10 * 1024 * 1024
+
+/** Fetch deadline in ms. Overridable via MDVIEW_REMOTE_TIMEOUT_MS (read per call
+ *  so tests can shorten it); defaults to 10s. */
+function remoteTimeoutMs(): number {
+  const v = Number(Deno.env.get('MDVIEW_REMOTE_TIMEOUT_MS'))
+  return Number.isFinite(v) && v > 0 ? v : 10_000
+}
+
+async function fetchRemoteText(url: string): Promise<string> {
+  const res = await fetch(url, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(remoteTimeoutMs()),
+    headers: { accept: 'text/markdown, text/plain, text/*;q=0.9, */*;q=0.5' },
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+  const declared = Number(res.headers.get('content-length') ?? 0)
+  if (declared > REMOTE_MAX_BYTES) {
+    if (res.body) await res.body.cancel()
+    throw new Error(`remote file too large (${(declared / 1048576).toFixed(1)} MB)`)
+  }
+  const raw = await res.text()
+  if (raw.length > REMOTE_MAX_BYTES) throw new Error('remote file too large')
+  return raw
+}
+
+/** Tab/title name for a remote doc: the URL's last path segment (or host). */
+function remoteFileName(url: string): string {
+  try {
+    const { pathname, hostname } = new URL(url)
+    return decodeURIComponent(pathname.slice(pathname.lastIndexOf('/') + 1)) || hostname
+  } catch {
+    return url
+  }
+}
+
+/** Rewrite relative <img> srcs in a remote doc to absolute URLs against the doc's
+ *  own URL, so images load from the remote host (there's no local file to inline).
+ *  Absolute / data / protocol-relative srcs are left untouched. */
+function absolutizeRemoteImages(html: string, baseUrl: string): string {
+  return html.replace(/<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, (tag) => {
+    const m = tag.match(/\ssrc="([^"]*)"/i)
+    if (!m) return tag
+    const src = m[1]!
+    if (/^(?:https?:|data:|\/\/)/i.test(src)) return tag
+    try {
+      return tag.replace(m[0], ` src="${new URL(src, baseUrl).href}"`)
+    } catch {
+      return tag
+    }
+  })
+}
+
+/** Read a markdown doc — local file OR remote http(s) URL — and render to HTML.
+ *  Server-side only; browser never calls this. A relative ref inside a remote doc
+ *  resolves against that doc's URL and is fetched too. Remote docs have no local
+ *  file, so mtime is 0 (external-change tracking is skipped for them). */
 export async function readAndRenderFile(
   filePath: string,
   basePath = '',
 ): Promise<{ abs: string; html: string; fileName: string; raw: string; mtime: number }> {
   const hashIdx = filePath.indexOf('#')
   const cleanPath = hashIdx >= 0 ? filePath.slice(0, hashIdx) : filePath
+
+  // Remote: the target is a URL, or any ref inside a remote doc (resolved against
+  // the doc's URL). Handled BEFORE resolve()/Deno.* so a URL is never mangled into
+  // a bogus local path (the root of the "freeze + can't open anything" bug).
+  const remoteBase = isRemoteUrl(basePath) ? basePath : ''
+  if (isRemoteUrl(cleanPath) || remoteBase) {
+    const url = isRemoteUrl(cleanPath) ? cleanPath : new URL(cleanPath, remoteBase).href
+    const raw = await fetchRemoteText(url)
+    const html = absolutizeRemoteImages(renderMarkdown(raw), url)
+    return { abs: url, html, fileName: remoteFileName(url), raw, mtime: 0 }
+  }
+
   const abs = (basePath && !isAbsolute(cleanPath))
     ? resolve(dirname(basePath), cleanPath)
     : resolve(cleanPath)
@@ -116,6 +192,37 @@ export async function fileDialog(startDir = ''): Promise<string | null> {
   return new TextDecoder().decode(stdout).trim()
 }
 
+// Schemes handed to the OS: http(s) → browser, mailto/tel → mail/phone app.
+// Anything else (file:, javascript:, …) is refused so a document can't make the
+// app launch an arbitrary local handler.
+const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'tel:'])
+
+/** OS "open this URL" command. MDVIEW_OPENER overrides the default (pick a
+ *  specific browser, or a stub in tests). No shell is involved. */
+function openerCommand(url: string): { cmd: string; args: string[] } {
+  const override = Deno.env.get('MDVIEW_OPENER')
+  if (override) return { cmd: override, args: [url] }
+  if (Deno.build.os === 'darwin') return { cmd: 'open', args: [url] }
+  if (Deno.build.os === 'windows') return { cmd: 'cmd', args: ['/c', 'start', '', url] }
+  return { cmd: 'xdg-open', args: [url] }
+}
+
+/** Open a URL in the system browser / OS handler — same server-side spawn pattern
+ *  as the file dialogs. Deno.Command passes args directly (no shell), so the URL
+ *  can't inject a command; still, only EXTERNAL_SCHEMES are allowed. */
+export async function openExternalUrl(url: string): Promise<void> {
+  let protocol: string
+  try {
+    protocol = new URL(url).protocol.toLowerCase()
+  } catch {
+    throw new Error(`invalid URL: ${url}`)
+  }
+  if (!EXTERNAL_SCHEMES.has(protocol)) throw new Error(`refused to open scheme "${protocol}"`)
+  const { cmd, args } = openerCommand(url)
+  const { success } = await new Deno.Command(cmd, { args, stdout: 'null', stderr: 'null' }).output()
+  if (!success) throw new Error(`opener "${cmd}" exited non-zero`)
+}
+
 export function getFileDir(absPath: string): string {
   return dirname(absPath)
 }
@@ -171,6 +278,58 @@ async function walk(dir: string): Promise<TreeNode[]> {
   return nodes
 }
 
+// Bounds so a search over a large workspace stays snappy and can't blow up state.
+const SEARCH_MAX_HITS = 200
+const SEARCH_MAX_FILE_BYTES = 2 * 1024 * 1024
+
+/** Case-insensitive substring search across the workspace's .md files (same dirs
+ *  scanTree walks — dotdirs + node_modules skipped). Returns line-level hits,
+ *  capped at SEARCH_MAX_HITS. Unreadable/oversized files are skipped, not fatal. */
+export async function searchWorkspace(rootDir: string, query: string): Promise<SearchHit[]> {
+  const needle = query.trim().toLowerCase()
+  if (!needle || !rootDir) return []
+  const hits: SearchHit[] = []
+
+  async function walkSearch(dir: string): Promise<void> {
+    if (hits.length >= SEARCH_MAX_HITS) return
+    let entries: Deno.DirEntry[]
+    try {
+      entries = []
+      for await (const e of Deno.readDir(dir)) entries.push(e)
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      if (hits.length >= SEARCH_MAX_HITS) return
+      if (e.name.startsWith('.') || (e.isDirectory && SKIP_DIRS.has(e.name))) continue
+      const p = join(dir, e.name)
+      if (e.isDirectory) {
+        await walkSearch(p)
+      } else if (e.isFile && isMd(e.name)) {
+        try {
+          const stat = await Deno.stat(p)
+          if (stat.size > SEARCH_MAX_FILE_BYTES) continue
+          const lines = (await Deno.readTextFile(p)).split('\n')
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i]!.toLowerCase().includes(needle)) {
+              hits.push({ path: p, fileName: e.name, line: i + 1, text: lines[i]!.trim().slice(0, 200) })
+              if (hits.length >= SEARCH_MAX_HITS) return
+            }
+          }
+        } catch {
+          // unreadable file — skip
+        }
+      }
+    }
+  }
+
+  await walkSearch(resolve(rootDir))
+  if (hits.length >= SEARCH_MAX_HITS) {
+    log.warn('mdview', `searchWorkspace "${query}": capped at ${SEARCH_MAX_HITS} hits`)
+  }
+  return hits
+}
+
 // ── File management ───────────────────────────────────────────────
 
 function assertValidName(name: string): void {
@@ -183,6 +342,16 @@ export async function pathExists(p: string): Promise<boolean> {
   try {
     await Deno.lstat(p)
     return true
+  } catch {
+    return false
+  }
+}
+
+/** True only if `p` exists and is a directory. Used to drop a stale/moved (or
+ *  old-bug bogus) persisted workspace instead of scanning/watching a dead path. */
+export async function dirExists(p: string): Promise<boolean> {
+  try {
+    return (await Deno.stat(p)).isDirectory
   } catch {
     return false
   }
@@ -253,8 +422,10 @@ export function renderMd(text: string, basePath = ''): string {
   return basePath ? inlineLocalImages(html, dirname(basePath)) : html
 }
 
-/** Classify CLI arg into file/dir. Returns { file, dir } where file='' for dir args. */
+/** Classify CLI arg into file/dir. Returns { file, dir } where file='' for dir args.
+ *  A remote URL is a file with no local workspace dir (so no watcher is set up). */
 export async function resolveCliArg(arg: string): Promise<{ file: string; dir: string }> {
+  if (isRemoteUrl(arg)) return { file: arg, dir: '' }
   const abs = resolve(arg)
   try {
     const s = await Deno.stat(abs)
@@ -266,20 +437,88 @@ export async function resolveCliArg(arg: string): Promise<{ file: string; dir: s
   }
 }
 
-/** Start a recursive filesystem watcher. Returns a disposer.
- *  onEvent is batched — callback receives each raw Deno.FsEvent. */
+// Dirs whose churn must never wake the watcher. aio writes runtime logs into
+// ./log — reacting to those writes feeds back (dispatch → log write → fs event
+// → dispatch) and spins the process until the server starves. node_modules/.git
+// are pure noise; excluding them also keeps the inotify watch count tiny.
+const WATCH_SKIP = new Set([...SKIP_DIRS, 'log', 'dist'])
+
+// Upper bound on watched dirs. An opened folder is arbitrary — a recursive
+// watch of a large tree can exhaust the kernel's inotify quota (ENOSPC). The
+// overflow is logged, never silently dropped.
+const MAX_WATCH_DIRS = 4096
+
+function isSkippedDir(name: string): boolean {
+  return name.startsWith('.') || WATCH_SKIP.has(name)
+}
+
+/** Should a watch event wake fsChanged? The tree and external-change checks only
+ *  care about markdown files and folder structure, so react to `.md` changes and
+ *  to extensionless (directory-like) entries — and ignore all other file churn.
+ *  This keeps a busy non-md file in the workspace (a build log, an editor swap
+ *  file) from feeding the dispatch→rescan cycle, independent of the dir skips. */
+function isWatchRelevant(root: string, path: string): boolean {
+  const rel = path.startsWith(root) ? path.slice(root.length + 1) : path
+  const segs = rel.split(/[\\/]/)
+  if (segs.some(isSkippedDir)) return false
+  const base = segs[segs.length - 1] ?? ''
+  const dot = base.lastIndexOf('.')
+  // dot <= 0 ⇒ no extension (a dir, or an extensionless file) — let it through so
+  // new/renamed folders refresh the tree; otherwise require a .md extension.
+  return dot <= 0 || base.slice(dot).toLowerCase() === '.md'
+}
+
+/** Workspace root + every non-skipped descendant dir. Skips node_modules/.git/
+ *  log/dist/dotdirs at every depth and does not follow symlinks (DirEntry
+ *  .isDirectory is false for them) — so it never wanders into a nested dependency
+ *  tree. Async, so watch setup stays off the own.set effect's synchronous path. */
+async function collectWatchDirs(root: string): Promise<string[]> {
+  const dirs: string[] = [root]
+  async function walk(dir: string): Promise<void> {
+    let entries: Deno.DirEntry[]
+    try {
+      entries = []
+      for await (const e of Deno.readDir(dir)) entries.push(e)
+    } catch { return }
+    for (const e of entries) {
+      if (!e.isDirectory || isSkippedDir(e.name)) continue
+      if (dirs.length >= MAX_WATCH_DIRS) return
+      const p = join(dir, e.name)
+      dirs.push(p)
+      await walk(p)
+    }
+  }
+  await walk(root)
+  return dirs
+}
+
+/** Start a filesystem watcher over the workspace. Returns a disposer.
+ *  Watches each relevant dir non-recursively rather than one recursive watch on
+ *  the root: a recursive watch registers an inotify handle per descendant —
+ *  thousands under node_modules — which is slow to set up (blew aio's 5ms effect
+ *  budget) and risks ENOSPC on large folders. Setup is async, so it never lands
+ *  on the synchronous own.set-effect path. A new nested dir created mid-session
+ *  is surfaced in the tree by the rescan fsChanged triggers, but its deep
+ *  contents aren't live-watched until the workspace is reopened — an accepted
+ *  trade for a bounded watch count. */
 export function watchWorkspace(dir: string, onEvent: (e: Deno.FsEvent) => void): () => void {
+  const root = resolve(dir)
   let watcher: Deno.FsWatcher | null = null
   let stopped = false
   ;(async () => {
     try {
-      watcher = Deno.watchFs(dir, { recursive: true })
+      const dirs = await collectWatchDirs(root)
+      if (stopped) return
+      if (dirs.length >= MAX_WATCH_DIRS) {
+        log.warn('mdview', `watchFs ${root}: capped at ${MAX_WATCH_DIRS} dirs — deep changes may be missed`)
+      }
+      watcher = Deno.watchFs(dirs, { recursive: false })
       for await (const e of watcher) {
         if (stopped) break
-        onEvent(e)
+        if (e.paths.some((p) => isWatchRelevant(root, p))) onEvent(e)
       }
     } catch (err) {
-      if (!stopped) log.warn('mdview', `watchFs ${dir}: ${formatError(err)}`)
+      if (!stopped) log.warn('mdview', `watchFs ${root}: ${formatError(err)}`)
     }
   })()
   return () => {
