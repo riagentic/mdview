@@ -4,6 +4,9 @@ dist/
 *.AppImage
 /mdview
 data.kv
+data.db
+data.db-wal
+data.db-shm
 /log/
 /test/
 /telemetry-id

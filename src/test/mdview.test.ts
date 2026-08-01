@@ -1,73 +1,102 @@
 import { testCell } from 'aio'
 import { mdview } from '../cell/mdview.ts'
 
-// ── Machine transitions ────────────────────────────────────────────
+// ── Doc lifecycle ──────────────────────────────────────────────────
+//
+// The `empty | viewing` state machine was removed in aio alpha27; the two
+// states are now derived from `filePath` and enforced by guard lines. These
+// tests therefore open a REAL file instead of asserting a machine status.
 
-testCell(mdview, 'starts in empty state', (t) => {
+const noDoc = (s: { filePath: string }) => s.filePath === ''
+
+async function withTempDoc(body: (file: string) => Promise<void>) {
+  const dir = await Deno.makeTempDir()
+  try {
+    const file = `${dir}/doc.md`
+    await Deno.writeTextFile(file, '# Doc\n\ntext\n')
+    await body(file)
+  } finally {
+    await Deno.remove(dir, { recursive: true })
+  }
+}
+
+testCell(mdview, 'starts with no document open', (t) => {
   t.init()
-  t.expect.status('empty')
-  t.expect.state(s => s.filePath === '')
+  t.expect.state(noDoc)
   t.expect.state(s => s.html === '')
   t.expect.state(s => s.error === null)
 })
 
-testCell(mdview, 'requestOpen: empty → viewing', (t) => {
-  t.init()
-  t.send.requestOpen('/test.md', 0)
-  t.expect.status('viewing')
+testCell(mdview, 'requestOpen opens the document', async (t) => {
+  await withTempDoc(async (file) => {
+    t.init()
+    await t.send.requestOpen(file, 0)
+    t.expect.state(s => s.filePath === file)
+    t.expect.state(s => s.html !== '')
+    t.expect.state(s => s.error === null)
+  })
 })
 
-testCell(mdview, 'closeDoc: viewing → empty', (t) => {
-  t.init()
-  t.send.requestOpen('/test.md', 0)
-  t.expect.status('viewing')
-  t.send.closeDoc()
-  t.expect.status('empty')
-  t.expect.state(s => s.filePath === '')
-  t.expect.state(s => s.html === '')
-  t.expect.state(s => s.scrollY === 0)
-  t.expect.state(s => s.history.length === 0)
-  t.expect.state(s => s.historyIndex === -1)
-  t.expect.state(s => s.error === null)
+testCell(mdview, 'closeDoc clears the open document', async (t) => {
+  await withTempDoc(async (file) => {
+    t.init()
+    await t.send.requestOpen(file, 0)
+    t.expect.state(s => s.filePath === file)
+    t.send.closeDoc()
+    t.expect.state(noDoc)
+    t.expect.state(s => s.html === '')
+    t.expect.state(s => s.scrollY === 0)
+    t.expect.state(s => s.history.length === 0)
+    t.expect.state(s => s.historyIndex === -1)
+    t.expect.state(s => s.error === null)
+  })
 })
 
 // ── State mutations ────────────────────────────────────────────────
 
-testCell(mdview, 'setScroll updates scrollY', (t) => {
-  t.init()
-  t.send.requestOpen('/test.md', 0)
-  t.send.setScroll(500)
-  t.expect.state(s => s.scrollY === 500)
+testCell(mdview, 'setScroll updates scrollY', async (t) => {
+  await withTempDoc(async (file) => {
+    t.init()
+    await t.send.requestOpen(file, 0)
+    t.send.setScroll(500)
+    t.expect.state(s => s.scrollY === 500)
+  })
 })
 
-testCell(mdview, 'setZoom updates zoom level', (t) => {
-  t.init()
-  t.send.requestOpen('/test.md', 0)
-  t.send.setZoom(150)
-  t.expect.state(s => s.zoom === 150)
+testCell(mdview, 'setZoom updates zoom level', async (t) => {
+  await withTempDoc(async (file) => {
+    t.init()
+    await t.send.requestOpen(file, 0)
+    t.send.setZoom(150)
+    t.expect.state(s => s.zoom === 150)
+  })
 })
 
-// ── Machine guards ─────────────────────────────────────────────────
+// ── Doc-scoped guards (no document open ⇒ no-op) ───────────────────
 
-testCell(mdview, 'setScroll blocked in empty state', (t) => {
+testCell(mdview, 'setScroll is a no-op with no document', (t) => {
   t.init()
-  t.expect.status('empty')
   t.send.setScroll(100)
   t.expect.state(s => s.scrollY === 0)
 })
 
-testCell(mdview, 'goBack blocked in empty state', (t) => {
+testCell(mdview, 'setZoom is a no-op with no document', (t) => {
   t.init()
-  t.expect.status('empty')
-  t.send.goBack(0)
-  t.expect.status('empty')
+  t.send.setZoom(150)
+  t.expect.state(s => s.zoom === 100)
 })
 
-testCell(mdview, 'closeDoc blocked in empty state', (t) => {
+testCell(mdview, 'goBack is a no-op with no document', async (t) => {
   t.init()
-  t.expect.status('empty')
+  await t.send.goBack(0)
+  t.expect.state(noDoc)
+  t.expect.state(s => s.historyIndex === -1)
+})
+
+testCell(mdview, 'closeDoc is idempotent with no document', (t) => {
+  t.init()
   t.send.closeDoc()
-  t.expect.status('empty')
+  t.expect.state(noDoc)
 })
 
 // ── Theme ──────────────────────────────────────────────────────────
@@ -77,9 +106,9 @@ testCell(mdview, 'starts in light theme', (t) => {
   t.expect.state((s) => s.theme === 'light')
 })
 
-testCell(mdview, 'toggleTheme flips light↔dark (works in empty state)', (t) => {
+testCell(mdview, 'toggleTheme flips light↔dark (works with no document)', (t) => {
   t.init()
-  t.expect.status('empty')
+  t.expect.state(noDoc)
   t.send.toggleTheme()
   t.expect.state((s) => s.theme === 'dark')
   t.send.toggleTheme()
@@ -214,8 +243,6 @@ testCell(mdview, 'external-change banner re-fires only on newer mtime', async (t
 
 testCell(mdview, 'random actions: core invariants hold', (t) => {
   t.init()
-  t.send.requestOpen('/test.md', 0)
-  t.expect.status('viewing')
   t.randomActions(100)
   t.expect.invariant(s => s.error === null || typeof s.error === 'string')
   t.expect.invariant(s => Array.isArray(s.history))

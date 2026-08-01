@@ -12,7 +12,7 @@ Deno.test('inlineLocalImages: local img src → data URI, byte-correct', async (
   const dir = await Deno.makeTempDir({ prefix: 'mdview-img-' })
   try {
     await Deno.writeFile(join(dir, 'pic.png'), PNG_1x1)
-    const out = inlineLocalImages('<img src="pic.png" alt="x">', dir)
+    const out = await inlineLocalImages('<img src="pic.png" alt="x">', dir)
     assertStringIncludes(out, 'data:image/png;base64,')
     const b64 = out.match(/base64,([^"]+)/)![1]!
     assertEquals(atob(b64).length, PNG_1x1.length)
@@ -21,16 +21,16 @@ Deno.test('inlineLocalImages: local img src → data URI, byte-correct', async (
   }
 })
 
-Deno.test('inlineLocalImages: leaves remote/data/missing srcs untouched', () => {
+Deno.test('inlineLocalImages: leaves remote/data/missing srcs untouched', async () => {
   const remote = '<img src="https://x.com/a.png">'
-  assertEquals(inlineLocalImages(remote, '/tmp'), remote)
+  assertEquals(await inlineLocalImages(remote, '/tmp'), remote)
   const data = '<img src="data:image/png;base64,AAAA">'
-  assertEquals(inlineLocalImages(data, '/tmp'), data)
+  assertEquals(await inlineLocalImages(data, '/tmp'), data)
   const missing = '<img src="nope.png">'
-  assert(inlineLocalImages(missing, '/tmp/does-not-exist').includes('nope.png'))
+  assert((await inlineLocalImages(missing, '/tmp/does-not-exist')).includes('nope.png'))
   // malformed %-escape must not throw / abort the render
   const bad = '<img src="%E0%">'
-  assertEquals(inlineLocalImages(bad, '/tmp'), bad)
+  assertEquals(await inlineLocalImages(bad, '/tmp'), bad)
 })
 
 async function tmp(): Promise<string> {

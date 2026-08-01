@@ -14,6 +14,10 @@ const loadHelpers = () => import(`${_hp}.ts`)
 // isRemoteUrl in mdview-io.ts.
 const isRemote = (p: string): boolean => /^https?:\/\//i.test(p)
 
+// A document is open ⇔ filePath is set. The single source of truth for the two
+// app states ('empty' | 'viewing') that the removed state machine encoded.
+const hasDoc = (s: MdviewState): boolean => !!s.filePath
+
 // ── Cell ───────────────────────────────────────────────────────────
 
 export const mdview = cell('mdview', {
@@ -58,49 +62,21 @@ export const mdview = cell('mdview', {
     ],
   },
 
-  machine: {
-    initial: 'empty',
-    states: {
-      empty: {
-        requestOpen: 'viewing',
-        requestOpenFolder: 'empty',
-        closeDoc: 'empty',
-        setWorkspace: 'empty',
-        rescanTree: 'empty', fsChanged: 'empty',
-        toggleSidebar: 'empty',
-        setSidebarVisible: 'empty',
-        setSidebarWidth: 'empty', setOutlineWidth: 'empty',
-        checkExternalChange: 'empty',
-        openExternal: 'empty',
-        searchWorkspace: 'empty', clearSearch: 'empty',
-        setMode: 'empty',
-        toggleTheme: 'empty', setTheme: 'empty',
-        createFileIn: 'empty', createFolderIn: 'empty',
-        renameEntry: 'empty', deleteEntry: 'empty', clearFsError: 'empty',
-      },
-      viewing: {
-        requestOpen: 'viewing',
-        requestOpenFolder: 'viewing',
-        setScroll: 'viewing', setZoom: 'viewing', closeDoc: 'empty',
-        navigateTo: 'viewing', goBack: 'viewing', goForward: 'viewing',
-        setWorkspace: 'viewing', rescanTree: 'viewing', fsChanged: 'viewing',
-        toggleSidebar: 'viewing', setSidebarVisible: 'viewing',
-        setSidebarWidth: 'viewing', setOutlineWidth: 'viewing',
-        openExternal: 'viewing',
-        searchWorkspace: 'viewing', clearSearch: 'viewing',
-        setMode: 'viewing', saveEdit: 'viewing',
-        toggleTheme: 'viewing', setTheme: 'viewing',
-        applyExternalReload: 'viewing', dismissExternalBanner: 'viewing',
-        checkExternalChange: 'viewing',
-        createFileIn: 'viewing', createFolderIn: 'viewing',
-        renameEntry: 'viewing', deleteEntry: 'viewing', clearFsError: 'viewing',
-      },
-    },
-  },
-
+  // Doc-scoped methods guard on `s.filePath` (see hasDoc): with no document
+  // open they are no-ops. This replaces the empty|viewing state-machine config
+  // removed in aio alpha27 — same guarantee, and now derived from the one
+  // source of truth instead of a parallel status field that could (and did)
+  // drift, e.g. deleteEntry clearing the doc while the status stayed 'viewing'.
   methods: {
-    setScroll(s: MdviewState, y: number) { s.scrollY = y },
-    setZoom(s: MdviewState, zoom: number) { s.zoom = zoom },
+    setScroll(s: MdviewState, y: number) {
+      if (!hasDoc(s)) return
+      s.scrollY = y
+    },
+
+    setZoom(s: MdviewState, zoom: number) {
+      if (!hasDoc(s)) return
+      s.zoom = zoom
+    },
 
     // Hand a web/mail link to the system browser (server spawns xdg-open, like
     // the file dialogs). Pure side effect — no state change.
@@ -234,6 +210,7 @@ export const mdview = cell('mdview', {
     },
 
     async navigateTo(s: MdviewState, filePath: string, currentScrollY: number) {
+      if (!hasDoc(s)) return
       const { readAndRenderFile, formatError } = await loadHelpers()
       const basePath = s.filePath
       // Remote target = an http URL, or a relative link inside a remote doc.
@@ -267,6 +244,7 @@ export const mdview = cell('mdview', {
     },
 
     async goBack(s: MdviewState, currentScrollY: number) {
+      if (!hasDoc(s)) return
       const { readAndRenderFile, formatError } = await loadHelpers()
       const idx = s.historyIndex
       if (idx <= 0) return
@@ -298,6 +276,7 @@ export const mdview = cell('mdview', {
     },
 
     async goForward(s: MdviewState, currentScrollY: number) {
+      if (!hasDoc(s)) return
       const { readAndRenderFile, formatError } = await loadHelpers()
       const idx = s.historyIndex
       const len = s.history.length
@@ -513,7 +492,7 @@ export const mdview = cell('mdview', {
         if (isCurrent) {
           // Only update state for current file's save.
           s.rawText = text
-          s.html = renderMd(text, s.filePath)
+          s.html = await renderMd(text, s.filePath)
           s.loadedMtime = newMtime
           s.dirty = false
           s.externallyChanged = false
@@ -530,7 +509,7 @@ export const mdview = cell('mdview', {
       try {
         const { raw, mtime } = await readRaw(s.filePath)
         s.rawText = raw
-        s.html = renderMd(raw, s.filePath)
+        s.html = await renderMd(raw, s.filePath)
         s.loadedMtime = mtime
         s.externallyChanged = false
         s.dirty = false
@@ -542,21 +521,24 @@ export const mdview = cell('mdview', {
     },
 
     dismissExternalBanner(s: MdviewState) {
+      if (!hasDoc(s)) return
       s.externallyChanged = false
       s.userAckedExternal = true
     },
   },
 
   onInit(app) {
-    const args = typeof Deno !== 'undefined' ? Deno.args : []
-    const cliArg = args.find((a: string) => !a.startsWith('--'))
     const state = app.getState() as MdviewState
 
-    if (cliArg) {
-      // Async CLI arg resolution; dispatches when done.
-      ;(async () => {
-        const { resolveCliArg } = await loadHelpers()
-        const { file, dir } = await resolveCliArg(cliArg)
+    // Both branches read the CLI arg, which is server-only (Deno.args) — hence
+    // the single async IIFE: the helpers module is never reachable from the
+    // browser bundle. Dispatches once resolution completes.
+    ;(async () => {
+      const { cliArg, resolveCliArg } = await loadHelpers()
+      const arg = cliArg()
+
+      if (arg) {
+        const { file, dir } = await resolveCliArg(arg)
         if (dir) app.dispatch(mdview.closeDoc.action())
         app.dispatch(mdview.setWorkspace.action(dir))
         if (file) {
@@ -564,18 +546,19 @@ export const mdview = cell('mdview', {
         } else {
           app.dispatch(mdview.setSidebarVisible.action(true))
         }
-      })()
-      return
-    }
+        return
+      }
 
-    const target = state.filePath
-    if (target) {
-      const scrollY = state.scrollY ?? 0
-      app.dispatch(mdview.requestOpen.action(target, scrollY))
-    }
-    if (state.workspaceDir) {
-      app.dispatch(mdview.setWorkspace.action(state.workspaceDir))
-    }
+      // No CLI arg — restore the persisted session.
+      const target = state.filePath
+      if (target) {
+        const scrollY = state.scrollY ?? 0
+        app.dispatch(mdview.requestOpen.action(target, scrollY))
+      }
+      if (state.workspaceDir) {
+        app.dispatch(mdview.setWorkspace.action(state.workspaceDir))
+      }
+    })()
   },
 })
 
