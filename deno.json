@@ -1,9 +1,6 @@
 {
   "title": "mdview",
   "nodeModulesDir": "auto",
-  "unstable": [
-    "kv"
-  ],
   "ui": { "renderer": "aio" },
   "compilerOptions": {
     "jsx": "react-jsx",
@@ -28,8 +25,8 @@
   "tasks": {
     "dev": "deno run -A src/app.ts",
     "am": "deno run -A dep/aio/src/am.ts",
-    "test": "deno test -A --unstable-kv src/test/",
-    "test:aio": "deno test -A --unstable-kv dep/aio/tests/",
+    "test": "deno test -A src/test/",
+    "test:aio": "deno test -A dep/aio/tests/",
     "compile": "deno run -A dep/aio/src/build.ts --compile",
     "compile:electron": "deno run -A dep/aio/src/build.ts --compile --electron",
     "compile:electron:remote": "deno run -A dep/aio/src/build.ts --compile --electron --remote",

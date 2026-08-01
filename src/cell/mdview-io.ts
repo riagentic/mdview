@@ -92,7 +92,7 @@ export async function readAndRenderFile(
   const raw = await Deno.readTextFile(abs)
   const stat = await Deno.stat(abs)
   const mtime = stat.mtime ? stat.mtime.getTime() : 0
-  return { abs, html: inlineLocalImages(renderMarkdown(raw), dirname(abs)), fileName: basename(abs), raw, mtime }
+  return { abs, html: await inlineLocalImages(renderMarkdown(raw), dirname(abs)), fileName: basename(abs), raw, mtime }
 }
 
 // Skip inlining images larger than this — keeps the broadcast HTML bounded.
@@ -118,29 +118,44 @@ function bytesToBase64(bytes: Uint8Array): string {
  *  bytes bypass the data:-blocking sanitizer guard. Remote/data/missing srcs are
  *  left untouched. Without this, a relative src resolves against the app origin
  *  (http://localhost:…/img.png) and 404s. */
-export function inlineLocalImages(html: string, baseDir: string): string {
+export async function inlineLocalImages(html: string, baseDir: string): Promise<string> {
   // Match the whole <img> tag, skipping quoted regions so a literal '>' inside
   // an attribute value (e.g. alt="a > b") doesn't truncate the match.
-  return html.replace(/<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, (tag) => {
-    const m = tag.match(/\ssrc="([^"]*)"/i)
-    if (!m) return tag
-    const src = m[1]!
-    if (/^(?:https?:|data:|file:|\/\/)/i.test(src)) return tag // remote / already-inlined
-    try {
-      // decode inside try: a malformed %-escape must not abort the whole render
-      const clean = decodeURIComponent(src.split(/[?#]/)[0]!)
-      if (!clean) return tag
-      const absImg = isAbsolute(clean) ? clean : resolve(baseDir, clean)
-      const stat = Deno.statSync(absImg)
-      if (!stat.isFile || stat.size > MAX_INLINE_IMAGE_BYTES) return tag
-      const mime = IMG_MIME[absImg.slice(absImg.lastIndexOf('.')).toLowerCase()]
-      if (!mime) return tag
-      const dataUri = `data:${mime};base64,${bytesToBase64(Deno.readFileSync(absImg))}`
-      return tag.replace(m[0], ` src="${dataUri}"`)
-    } catch {
-      return tag // missing / unreadable → leave as-is
-    }
-  })
+  const tags = [...html.matchAll(/<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi)]
+  if (tags.length === 0) return html
+  // Resolve every image concurrently (async I/O, never blocks the event loop);
+  // a tag with no inlinable local src resolves to itself.
+  const replacements = await Promise.all(tags.map((t) => inlineImageTag(t[0], baseDir)))
+  // Splice replacements back in right-to-left so earlier match offsets stay valid.
+  let out = html
+  for (let i = tags.length - 1; i >= 0; i--) {
+    const t = tags[i]!
+    out = out.slice(0, t.index) + replacements[i] + out.slice(t.index + t[0].length)
+  }
+  return out
+}
+
+/** Resolve one <img> tag: local file src → base64 data URI, everything else
+ *  (remote/data/missing/oversized/unknown-type) → the tag unchanged. */
+async function inlineImageTag(tag: string, baseDir: string): Promise<string> {
+  const m = tag.match(/\ssrc="([^"]*)"/i)
+  if (!m) return tag
+  const src = m[1]!
+  if (/^(?:https?:|data:|file:|\/\/)/i.test(src)) return tag // remote / already-inlined
+  try {
+    // decode inside try: a malformed %-escape must not abort the whole render
+    const clean = decodeURIComponent(src.split(/[?#]/)[0]!)
+    if (!clean) return tag
+    const absImg = isAbsolute(clean) ? clean : resolve(baseDir, clean)
+    const stat = await Deno.stat(absImg)
+    if (!stat.isFile || stat.size > MAX_INLINE_IMAGE_BYTES) return tag
+    const mime = IMG_MIME[absImg.slice(absImg.lastIndexOf('.')).toLowerCase()]
+    if (!mime) return tag
+    const dataUri = `data:${mime};base64,${bytesToBase64(await Deno.readFile(absImg))}`
+    return tag.replace(m[0], ` src="${dataUri}"`)
+  } catch {
+    return tag // missing / unreadable → leave as-is
+  }
 }
 
 let dialogTool: 'zenity' | 'kdialog' | null | undefined
@@ -417,9 +432,17 @@ export async function readRaw(abs: string): Promise<{ raw: string; mtime: number
 /** Render markdown to HTML. Proxy for `lib/md.ts` exposed via loadHelpers
  *  so the browser bundle (which imports only mdview.ts) never pulls marked/hljs.
  *  Pass the file path so relative images resolve against its directory. */
-export function renderMd(text: string, basePath = ''): string {
+export async function renderMd(text: string, basePath = ''): Promise<string> {
   const html = renderMarkdown(text)
-  return basePath ? inlineLocalImages(html, dirname(basePath)) : html
+  return basePath ? await inlineLocalImages(html, dirname(basePath)) : html
+}
+
+/** The path/URL the app was launched with, '' when none. Lives here (server-only)
+ *  because reading Deno.args from the cell module would drag Deno.* into the
+ *  browser bundle — aio's boundary check rejects that. */
+export function cliArg(): string {
+  const args = typeof Deno !== 'undefined' ? Deno.args : []
+  return args.find((a) => !a.startsWith('--')) ?? ''
 }
 
 /** Classify CLI arg into file/dir. Returns { file, dir } where file='' for dir args.
