@@ -1,6 +1,18 @@
 import { marked } from 'marked'
 import hljs from 'highlight.js'
-import DOMPurify from 'isomorphic-dompurify'
+import createDOMPurify from 'dompurify'
+import { JSDOM } from 'jsdom'
+
+// Server-side DOMPurify over a throwaway JSDOM window — the same three lines
+// `isomorphic-dompurify` runs, inlined so the jsdom version is OURS to pin.
+// That package hard-requires jsdom ^28, and jsdom >= 27 evaluated alongside
+// aio's server graph deadlocks Deno's module loader ("Module evaluation is
+// still pending after multiple event loop iterations" — the app never boots).
+// Either half alone is fine; only the pair stalls. See aio.md. Keep jsdom at
+// ^26 until that is fixed upstream — a bump here is a boot-time failure, not a
+// type error, so `deno check` will not catch it.
+// deno-lint-ignore no-explicit-any
+const DOMPurify = createDOMPurify(new JSDOM('<!DOCTYPE html>').window as any)
 
 // GitHub-style slug: lowercase, strip non-alphanumeric (keep hyphens), collapse spaces to hyphens
 function slugify(text: string): string {

@@ -93,7 +93,15 @@ function Outline() {
                 data-level={h.level}
                 style={{ paddingLeft: `${(h.level - 1) * 12 + 12}px` }}
                 title={h.text}
+                role="button"
+                tabIndex={h.id ? 0 : -1}
+                aria-disabled={!h.id}
                 onClick={() => scrollToHeading(h.id)}
+                onKeyDown={(e: KeyboardEvent) => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return
+                  e.preventDefault()
+                  scrollToHeading(h.id)
+                }}
               >{h.text}</li>
             ))}
           </ul>

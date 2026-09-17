@@ -6,7 +6,7 @@
 
 
 ## Meta
-- mdview current version is v0.3
+- mdview current version is v0.3.2
 - app window (electron) is showing title mdview [version]
 - version is also stated on main page like mdivew [version]
 

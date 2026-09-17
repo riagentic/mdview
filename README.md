@@ -66,15 +66,20 @@ deno task test
 # app manager — status, state inspection, dispatch, UI snapshot
 deno task am status
 
-# compile to standalone binary / Electron app
+# build the Electron app (the default target)
 deno task compile
-deno task compile:electron
+
+# build every target declared in deno.json `build.targets` -> dist/
+deno task build
+
+# ...or one named target
+deno task build --targets=android
 ```
 
 ## Stack
 
-- Deno 2.6+ / TypeScript / Electron
-- [aio](https://github.com/riagentic/aio) `1.0.0-beta1` — AIR renderer, state management, persistence
+- Deno 2.9+ / TypeScript / Electron
+- [aio](https://github.com/riagentic/aio) `v1.0.2-beta` — AIR renderer, state management, persistence
 - [marked](https://github.com/markedjs/marked) — markdown parsing
 - [highlight.js](https://highlightjs.org/) — syntax highlighting
-- [isomorphic-dompurify](https://github.com/kkomelin/isomorphic-dompurify) — HTML sanitization
+- [dompurify](https://github.com/cure53/DOMPurify) + [jsdom](https://github.com/jsdom/jsdom) `^26` — HTML sanitization

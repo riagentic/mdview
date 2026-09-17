@@ -123,6 +123,7 @@ export default function Editor({ filePath, value, zoom, onChange, onFollowLink }
         ref={taRef}
         className="editor-input markdown-editor"
         defaultValue={value}
+        aria-label="Markdown source editor"
         spellcheck={false}
         onInput={handleInput}
         onScroll={handleScroll}

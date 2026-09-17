@@ -1,6 +1,10 @@
 import { cell, log, own, schedule } from 'aio'
-import type { CellEffect } from 'aio'
+import type { MethodDraftServed } from 'aio'
 import type { HistoryEntry, Mode, MdviewState, SearchHit, Theme, TreeNode } from '../type/mdview.ts'
+
+// Draft type for methods that emit effects — `s.$do(...)`, the alpha52 effect
+// channel that replaced returning a CellEffect.
+type Draft = MdviewState & MethodDraftServed
 
 export type { HistoryEntry, Mode, MdviewState, SearchHit, Theme, TreeNode } from '../type/mdview.ts'
 
@@ -21,6 +25,21 @@ const hasDoc = (s: MdviewState): boolean => !!s.filePath
 // ── Cell ───────────────────────────────────────────────────────────
 
 export const mdview = cell('mdview', {
+
+  // alpha52 flipped the async default to `transaction: true` (snapshot reads +
+  // one atomic commit). mdview declines it deliberately, on the framework's own
+  // guidance — transactions suit correctness-critical cells, not hot ones with
+  // a large store:
+  //  · cost — a transactional call deep-clones the WHOLE cell state on entry,
+  //    and this one carries the rendered html, the raw text, the workspace tree
+  //    and search hits (~100 KB). searchWorkspace runs per keystroke.
+  //  · live reads are the point here — searchWorkspace's stale-response guard
+  //    (`s.searchQuery === query`) and checkExternalChange's mtime compare must
+  //    see what other methods committed while they awaited, not a pinned entry
+  //    snapshot that makes the guard inert.
+  //  · incremental commit is the loading indicator — `s.loading = true` has to
+  //    reach the client before the fetch it announces returns.
+  transaction: false,
 
   state: {
     filePath: '',
@@ -68,19 +87,20 @@ export const mdview = cell('mdview', {
   // source of truth instead of a parallel status field that could (and did)
   // drift, e.g. deleteEntry clearing the doc while the status stayed 'viewing'.
   methods: {
-    setScroll(s: MdviewState, y: number) {
+    setScroll(s: MdviewState, y = 0) {
       if (!hasDoc(s)) return
       s.scrollY = y
     },
 
-    setZoom(s: MdviewState, zoom: number) {
+    setZoom(s: MdviewState, zoom = 100) {
       if (!hasDoc(s)) return
       s.zoom = zoom
     },
 
     // Hand a web/mail link to the system browser (server spawns xdg-open, like
     // the file dialogs). Pure side effect — no state change.
-    async openExternal(_s: MdviewState, url: string) {
+    async openExternal(_s: MdviewState, url = '') {
+      if (!url) return
       const { openExternalUrl, formatError } = await loadHelpers()
       try {
         await openExternalUrl(url)
@@ -109,19 +129,19 @@ export const mdview = cell('mdview', {
       s.sidebarVisible = !s.sidebarVisible
     },
 
-    setSidebarVisible(s: MdviewState, visible: boolean) {
+    setSidebarVisible(s: MdviewState, visible = false) {
       s.sidebarVisible = !!visible
     },
 
-    setSidebarWidth(s: MdviewState, px: number) {
+    setSidebarWidth(s: MdviewState, px = 260) {
       s.sidebarWidth = Math.max(160, Math.min(640, Math.round(px)))
     },
 
-    setOutlineWidth(s: MdviewState, px: number) {
+    setOutlineWidth(s: MdviewState, px = 240) {
       s.outlineWidth = Math.max(160, Math.min(560, Math.round(px)))
     },
 
-    setMode(s: MdviewState, mode: Mode) {
+    setMode(s: MdviewState, mode: Mode = 'view') {
       s.mode = mode
     },
 
@@ -129,13 +149,17 @@ export const mdview = cell('mdview', {
       s.theme = s.theme === 'dark' ? 'light' : 'dark'
     },
 
-    setTheme(s: MdviewState, theme: Theme) {
+    setTheme(s: MdviewState, theme: Theme = 'light') {
       s.theme = theme === 'dark' ? 'dark' : 'light'
     },
 
-    async requestOpenFolder(s: MdviewState): Promise<CellEffect | void> {
+    async requestOpenFolder(s: Draft) {
+      // Gather before the first await: `folderDialog`'s start dir is read from
+      // live state, so capture it while the draft is still un-suspended rather
+      // than reading s.* after `loadHelpers()` (aiol's post-await read hint).
+      const startDir = s.workspaceDir || s.lastDir
       const { folderDialog, scanTree, watchWorkspace } = await loadHelpers()
-      const dir = await folderDialog(s.workspaceDir || s.lastDir)
+      const dir = await folderDialog(startDir)
       if (!dir) return
       s.workspaceDir = dir
       s.tree = await scanTree(dir)
@@ -154,16 +178,21 @@ export const mdview = cell('mdview', {
       s.historyIndex = -1
       // Same id ⇒ previous watcher's disposer runs first; auto-disposed on
       // cell disable and app shutdown (AIO-382).
-      return own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged()))
+      s.$do(own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged())))
     },
 
-    async requestOpen(s: MdviewState, filePath = '', scrollY = 0, mode?: Mode): Promise<CellEffect | void> {
+    async requestOpen(s: Draft, filePath = '', scrollY = 0, mode?: Mode) {
+      // Gather the reads this method needs before the first await (see
+      // requestOpenFolder): `lastDir` seeds the dialog, `hadWorkspace` decides
+      // whether the opened file may infer one.
+      const startDir = s.lastDir
+      const hadWorkspace = !!s.workspaceDir
       const { readAndRenderFile, fileDialog, getFileDir, formatError } = await loadHelpers()
       s.error = null
 
       let targetPath = filePath
       if (!targetPath) {
-        const path = await fileDialog(s.lastDir)
+        const path = await fileDialog(startDir)
         if (!path) return
         targetPath = path
       }
@@ -193,13 +222,13 @@ export const mdview = cell('mdview', {
         if (isRemote(result.abs)) {
           s.mode = 'view'
         } else {
-          s.lastDir = getFileDir(result.abs)
-          if (!s.workspaceDir) {
-            const dir = s.lastDir
+          const dir = getFileDir(result.abs)
+          s.lastDir = dir
+          if (!hadWorkspace) {
             s.workspaceDir = dir
             // Follow-up dispatch: scan + watch the inferred workspace. 1ms ≈ next
             // tick — defers out of this method; aio rejects a 0ms delay.
-            return schedule.after('mdview:scan-workspace', 1, mdview.setWorkspace.action(dir))
+            s.$do(schedule.after('mdview:scan-workspace', 1, mdview.setWorkspace.action(dir)))
           }
         }
       } catch (err) {
@@ -209,19 +238,23 @@ export const mdview = cell('mdview', {
       }
     },
 
-    async navigateTo(s: MdviewState, filePath: string, currentScrollY: number) {
+    async navigateTo(s: MdviewState, filePath = '', currentScrollY = 0) {
       if (!hasDoc(s)) return
-      const { readAndRenderFile, formatError } = await loadHelpers()
+      // Gather before awaiting: base path, current history and index are the
+      // inputs the write below needs, read while the draft is un-suspended.
       const basePath = s.filePath
+      const prevHistory = s.history
+      const prevIndex = s.historyIndex
+      const { readAndRenderFile, formatError } = await loadHelpers()
       // Remote target = an http URL, or a relative link inside a remote doc.
       if (isRemote(filePath) || isRemote(basePath)) s.loading = true
       try {
         const result = await readAndRenderFile(filePath, basePath)
         s.loading = false
-        const history = s.history.map((e, i) =>
-          i === s.historyIndex ? { ...e, scrollY: currentScrollY } : { ...e }
+        const history = prevHistory.map((e, i) =>
+          i === prevIndex ? { ...e, scrollY: currentScrollY } : { ...e }
         )
-        const newIndex = s.historyIndex + 1
+        const newIndex = prevIndex + 1
         history.splice(newIndex)
         history.push({ filePath: result.abs, scrollY: 0, fileName: result.fileName })
         s.history = history
@@ -243,16 +276,18 @@ export const mdview = cell('mdview', {
       }
     },
 
-    async goBack(s: MdviewState, currentScrollY: number) {
+    async goBack(s: MdviewState, currentScrollY = 0) {
       if (!hasDoc(s)) return
-      const { readAndRenderFile, formatError } = await loadHelpers()
+      // Gather the target entry and index before the first await.
       const idx = s.historyIndex
       if (idx <= 0) return
       const entry = s.history[idx - 1]!
       const entryPath = entry.filePath
       const entryScrollY = entry.scrollY
+      const prevHistory = s.history
+      const { readAndRenderFile, formatError } = await loadHelpers()
 
-      s.history = s.history.map((e, i) =>
+      s.history = prevHistory.map((e, i) =>
         i === idx ? { ...e, scrollY: currentScrollY } : { ...e }
       )
       s.historyIndex = idx - 1
@@ -275,17 +310,19 @@ export const mdview = cell('mdview', {
       }
     },
 
-    async goForward(s: MdviewState, currentScrollY: number) {
+    async goForward(s: MdviewState, currentScrollY = 0) {
       if (!hasDoc(s)) return
-      const { readAndRenderFile, formatError } = await loadHelpers()
+      // Gather the target entry and index before the first await.
       const idx = s.historyIndex
       const len = s.history.length
       if (idx >= len - 1) return
       const entry = s.history[idx + 1]!
       const entryPath = entry.filePath
       const entryScrollY = entry.scrollY
+      const prevHistory = s.history
+      const { readAndRenderFile, formatError } = await loadHelpers()
 
-      s.history = s.history.map((e, i) =>
+      s.history = prevHistory.map((e, i) =>
         i === idx ? { ...e, scrollY: currentScrollY } : { ...e }
       )
       s.historyIndex = idx + 1
@@ -308,13 +345,14 @@ export const mdview = cell('mdview', {
       }
     },
 
-    async setWorkspace(s: MdviewState, dir: string): Promise<CellEffect | void> {
+    async setWorkspace(s: Draft, dir = '') {
       // A remote URL is never a workspace — clear any watcher rather than trying
       // to scan/watch a bogus local path (defensive: resolveCliArg already blocks it).
       if (!dir || isRemote(dir)) {
         s.workspaceDir = ''
         s.tree = []
-        return own.dispose('mdview:watcher')
+        s.$do(own.dispose('mdview:watcher'))
+        return
       }
       const { scanTree, watchWorkspace, dirExists } = await loadHelpers()
       // Drop a workspace that no longer exists (moved/deleted, or a bogus path
@@ -322,37 +360,45 @@ export const mdview = cell('mdview', {
       if (!(await dirExists(dir))) {
         s.workspaceDir = ''
         s.tree = []
-        return own.dispose('mdview:watcher')
+        s.$do(own.dispose('mdview:watcher'))
+        return
       }
       s.workspaceDir = dir
       s.tree = await scanTree(dir)
-      return own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged()))
+      // mdview holds a single open workspace (s.workspaceDir is one path), so
+      // replace-on-set IS the previous dir's disposal, like own.dispose above.
+      // aiol-ok: one mdview:watcher at a time
+      s.$do(own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged())))
     },
 
     // Watcher callback lands here; debounced follow-ups via same-id replace.
-    fsChanged(_s: MdviewState): CellEffect {
-      return [
+    fsChanged(s: Draft) {
+      s.$do(
         schedule.after('mdview:rescan', 200, mdview.rescanTree.action()),
         schedule.after('mdview:ext-check', 200, mdview.checkExternalChange.action()),
-      ]
+      )
     },
 
     async rescanTree(s: MdviewState) {
-      if (!s.workspaceDir) return
+      const dir = s.workspaceDir
+      if (!dir) return
       const { scanTree } = await loadHelpers()
-      s.tree = await scanTree(s.workspaceDir)
+      s.tree = await scanTree(dir)
     },
 
     // Workspace-wide content search (sidebar). Empty query clears results.
-    async searchWorkspace(s: MdviewState, query: string) {
+    async searchWorkspace(s: MdviewState, query = '') {
       s.searchQuery = query
-      if (!query.trim() || !s.workspaceDir) {
+      const dir = s.workspaceDir
+      if (!query.trim() || !dir) {
         s.searchResults = []
         return
       }
       const { searchWorkspace } = await loadHelpers()
-      const results = await searchWorkspace(s.workspaceDir, query)
-      // Ignore stale responses: a newer keystroke already changed the query.
+      const results = await searchWorkspace(dir, query)
+      // Ignore stale responses: a newer keystroke already changed the query —
+      // this read is deliberately live, not pinned.
+      // aio-ok: live re-read is the stale-response guard
       if (s.searchQuery === query) s.searchResults = results
     },
 
@@ -365,70 +411,84 @@ export const mdview = cell('mdview', {
 
     clearFsError(s: MdviewState) { s.fsError = null },
 
-    async createFileIn(s: MdviewState, dirPath: string, name: string): Promise<CellEffect | void> {
+    async createFileIn(s: Draft, dirPath = '', name = '') {
+      // Gather before awaiting: the target parent and workspace dir are inputs
+      // to the writes below, read while the draft is un-suspended.
+      const parent = dirPath || s.workspaceDir
+      const workspaceDir = s.workspaceDir
       const { createMarkdownFile, scanTree, formatError } = await loadHelpers()
       s.fsError = null
-      const parent = dirPath || s.workspaceDir
-      if (!insideWorkspace(s, parent)) { s.fsError = 'Folder is outside the workspace'; return }
+      if (!insideWorkspace(workspaceDir, parent)) { s.fsError = 'Folder is outside the workspace'; return }
       try {
         const abs = await createMarkdownFile(parent, name)
-        s.tree = await scanTree(s.workspaceDir)
+        s.tree = await scanTree(workspaceDir)
         // Open the fresh file straight into the editor. 1ms ≈ next tick — defers
         // out of this method; aio rejects a 0ms delay.
-        return schedule.after('mdview:open-created', 1, mdview.requestOpen.action(abs, 0, 'edit'))
+        s.$do(schedule.after('mdview:open-created', 1, mdview.requestOpen.action(abs, 0, 'edit')))
       } catch (err) {
         log.warn('mdview', `Create file "${name}" in ${parent}: ${formatError(err)}`)
         s.fsError = formatError(err)
       }
     },
 
-    async createFolderIn(s: MdviewState, dirPath: string, name: string) {
+    async createFolderIn(s: MdviewState, dirPath = '', name = '') {
+      // Gather before awaiting (see createFileIn).
+      const parent = dirPath || s.workspaceDir
+      const workspaceDir = s.workspaceDir
       const { createFolder, scanTree, formatError } = await loadHelpers()
       s.fsError = null
-      const parent = dirPath || s.workspaceDir
-      if (!insideWorkspace(s, parent)) { s.fsError = 'Folder is outside the workspace'; return }
+      if (!insideWorkspace(workspaceDir, parent)) { s.fsError = 'Folder is outside the workspace'; return }
       try {
         await createFolder(parent, name)
-        s.tree = await scanTree(s.workspaceDir)
+        s.tree = await scanTree(workspaceDir)
       } catch (err) {
         log.warn('mdview', `Create folder "${name}" in ${parent}: ${formatError(err)}`)
         s.fsError = formatError(err)
       }
     },
 
-    async renameEntry(s: MdviewState, path: string, newName: string, isDir: boolean) {
+    async renameEntry(s: MdviewState, path = '', newName = '', isDir = false) {
+      // Gather before awaiting: workspace root and the paths a rename remaps.
+      const workspaceDir = s.workspaceDir
+      const prevFilePath = s.filePath
+      const prevLastDir = s.lastDir
+      const prevHistory = s.history
       const { renamePath, scanTree, formatError } = await loadHelpers()
       s.fsError = null
-      if (!insideWorkspace(s, path)) { s.fsError = 'Path is outside the workspace'; return }
+      if (!insideWorkspace(workspaceDir, path)) { s.fsError = 'Path is outside the workspace'; return }
       try {
         const newPath = await renamePath(path, newName, isDir)
         if (newPath !== path) {
           const remap = (p: string) =>
             p === path ? newPath : p.startsWith(path + '/') ? newPath + p.slice(path.length) : p
-          if (remap(s.filePath) !== s.filePath) {
-            s.filePath = remap(s.filePath)
-            s.fileName = baseName(s.filePath)
+          if (remap(prevFilePath) !== prevFilePath) {
+            const nextFilePath = remap(prevFilePath)
+            s.filePath = nextFilePath
+            s.fileName = baseName(nextFilePath)
           }
-          s.lastDir = remap(s.lastDir)
-          s.history = s.history.map((e) => {
+          s.lastDir = remap(prevLastDir)
+          s.history = prevHistory.map((e) => {
             const np = remap(e.filePath)
             return { ...e, filePath: np, fileName: np === e.filePath ? e.fileName : baseName(np) }
           })
         }
-        s.tree = await scanTree(s.workspaceDir)
+        s.tree = await scanTree(workspaceDir)
       } catch (err) {
         log.warn('mdview', `Rename ${path} → "${newName}": ${formatError(err)}`)
         s.fsError = formatError(err)
       }
     },
 
-    async deleteEntry(s: MdviewState, path: string, isDir: boolean) {
+    async deleteEntry(s: MdviewState, path = '', isDir = false) {
+      // Gather before awaiting: workspace root and the open doc's path.
+      const workspaceDir = s.workspaceDir
+      const prevFilePath = s.filePath
       const { deletePath, scanTree, formatError } = await loadHelpers()
       s.fsError = null
-      if (!insideWorkspace(s, path)) { s.fsError = 'Path is outside the workspace'; return }
+      if (!insideWorkspace(workspaceDir, path)) { s.fsError = 'Path is outside the workspace'; return }
       try {
         await deletePath(path, isDir)
-        if (s.filePath === path || s.filePath.startsWith(path + '/')) {
+        if (prevFilePath === path || prevFilePath.startsWith(path + '/')) {
           // Open doc was deleted — reset doc state, keep workspace + sidebar.
           s.filePath = ''
           s.html = ''
@@ -444,7 +504,7 @@ export const mdview = cell('mdview', {
           s.userAckedExternal = false
           s.mode = 'view'
         }
-        s.tree = await scanTree(s.workspaceDir)
+        s.tree = await scanTree(workspaceDir)
       } catch (err) {
         log.warn('mdview', `Delete ${path}: ${formatError(err)}`)
         s.fsError = formatError(err)
@@ -452,19 +512,24 @@ export const mdview = cell('mdview', {
     },
 
     async checkExternalChange(s: MdviewState) {
-      if (!s.filePath || isRemote(s.filePath)) return
+      // Gather before awaiting: the path to stat and the mtimes/flag the
+      // compare below needs, read while the draft is un-suspended.
+      const filePath = s.filePath
+      if (!filePath || isRemote(filePath)) return
+      const loadedMtime = s.loadedMtime
+      const externalMtime = s.externalMtime
+      const userAcked = s.userAckedExternal
       const { statMtime } = await loadHelpers()
-      const m = await statMtime(s.filePath)
-      if (m <= s.loadedMtime) return
+      const m = await statMtime(filePath)
+      if (m <= loadedMtime) return
       // Suppress only the change the user already acked ("Keep my edits"); a
       // strictly newer on-disk mtime re-surfaces the banner.
-      if (s.userAckedExternal && m <= s.externalMtime) return
+      if (userAcked && m <= externalMtime) return
       s.externallyChanged = true
       s.externalMtime = m
     },
 
-    async saveEdit(s: MdviewState, text: string, path?: string) {
-      const { writeMarkdownFile, statMtime, renderMd, formatError } = await loadHelpers()
+    async saveEdit(s: MdviewState, text = '', path: string | undefined = undefined) {
       // If explicit path provided (file-switch flush), use it. Otherwise use s.filePath.
       const targetPath = path ?? s.filePath
       if (!targetPath) return
@@ -474,12 +539,17 @@ export const mdview = cell('mdview', {
       // loadedMtime / userAckedExternal / externallyChanged track the CURRENTLY-viewed
       // file only. A cross-file flush (navigating away with unsaved edits) must not
       // consult or mutate them — doing so drops the edits AND corrupts current-file
-      // state with a phantom "changed on disk" banner.
-      const isCurrent = targetPath === s.filePath
+      // state with a phantom "changed on disk" banner. All gathered before the
+      // first await (see requestOpenFolder).
+      const filePath = s.filePath
+      const isCurrent = targetPath === filePath
+      const loadedMtime = s.loadedMtime
+      const userAcked = s.userAckedExternal
+      const { writeMarkdownFile, statMtime, renderMd, formatError } = await loadHelpers()
       try {
         if (isCurrent) {
           const onDisk = await statMtime(targetPath)
-          if (onDisk > s.loadedMtime && !s.userAckedExternal) {
+          if (onDisk > loadedMtime && !userAcked) {
             // External change detected during save — mark dirty, don't overwrite.
             s.externallyChanged = true
             s.externalMtime = onDisk
@@ -492,7 +562,7 @@ export const mdview = cell('mdview', {
         if (isCurrent) {
           // Only update state for current file's save.
           s.rawText = text
-          s.html = await renderMd(text, s.filePath)
+          s.html = await renderMd(text, filePath)
           s.loadedMtime = newMtime
           s.dirty = false
           s.externallyChanged = false
@@ -504,18 +574,19 @@ export const mdview = cell('mdview', {
     },
 
     async applyExternalReload(s: MdviewState) {
-      if (!s.filePath) return
+      const filePath = s.filePath
+      if (!filePath) return
       const { readRaw, renderMd, formatError } = await loadHelpers()
       try {
-        const { raw, mtime } = await readRaw(s.filePath)
+        const { raw, mtime } = await readRaw(filePath)
         s.rawText = raw
-        s.html = await renderMd(raw, s.filePath)
+        s.html = await renderMd(raw, filePath)
         s.loadedMtime = mtime
         s.externallyChanged = false
         s.dirty = false
         s.userAckedExternal = false
       } catch (err) {
-        log.error('mdview', `Reload failed: ${s.filePath} — ${formatError(err)}`)
+        log.error('mdview', `Reload failed: ${filePath} — ${formatError(err)}`)
         s.error = formatError(err)
       }
     },
@@ -563,8 +634,8 @@ export const mdview = cell('mdview', {
 })
 
 // File-management ops only touch paths inside the open workspace.
-function insideWorkspace(s: MdviewState, p: string): boolean {
-  return !!s.workspaceDir && !!p && (p === s.workspaceDir || p.startsWith(s.workspaceDir + '/'))
+function insideWorkspace(workspaceDir: string, p: string): boolean {
+  return !!workspaceDir && !!p && (p === workspaceDir || p.startsWith(workspaceDir + '/'))
 }
 
 const baseName = (p: string) => p.slice(p.lastIndexOf('/') + 1)
