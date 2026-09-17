@@ -1,37 +1,57 @@
 {
+  "aioVersion": "v1.0.2-beta",
   "title": "mdview",
+  "version": "0.3",
   "nodeModulesDir": "auto",
-  "ui": { "renderer": "aio" },
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "aio",
-    "lib": ["deno.ns", "deno.unstable", "dom", "dom.iterable"],
+    "lib": [
+      "deno.ns",
+      "deno.unstable",
+      "dom",
+      "dom.iterable"
+    ],
     "strict": true
   },
   "imports": {
     "electron": "npm:electron@^41.1.0",
     "aio": "./dep/aio/mod.ts",
     "aio/air": "./dep/aio/src/air.ts",
+    "aio/testing": "./dep/aio/src/cell-test.ts",
     "aio/jsx-runtime": "./dep/aio/src/jsx-runtime.ts",
-    "immer": "npm:immer@^10",
-    "@std/path": "jsr:@std/path@^1",
-    "@std/assert": "jsr:@std/assert@^1",
+    "immer": "npm:immer@10.2.0",
+    "@std/path": "jsr:@std/path@1.1.3",
+    "@std/assert": "jsr:@std/assert@1.0.19",
     "@b-fuze/deno-dom": "jsr:@b-fuze/deno-dom@^0.1",
-    "esbuild": "npm:esbuild@^0.27.3",
+    "esbuild": "npm:esbuild@0.24.2",
     "marked": "npm:marked@^14",
     "highlight.js": "npm:highlight.js@^11",
-    "isomorphic-dompurify": "npm:isomorphic-dompurify@^2"
+    "dompurify": "npm:dompurify@^3",
+    "jsdom": "npm:jsdom@^26",
+    "happy-dom": "npm:happy-dom@17.6.3"
   },
   "tasks": {
-    "dev": "deno run -A src/app.ts",
-    "am": "deno run -A dep/aio/src/am.ts",
+    "dev": "deno run -A src/app.ts --client=electron",
+    "am": "deno run -A ./dep/aio/src/am.ts",
     "test": "deno test -A src/test/",
     "test:aio": "deno test -A dep/aio/tests/",
-    "compile": "deno run -A dep/aio/src/build.ts --compile",
-    "compile:electron": "deno run -A dep/aio/src/build.ts --compile --electron",
-    "compile:electron:remote": "deno run -A dep/aio/src/build.ts --compile --electron --remote",
-    "compile:android": "deno run -A dep/aio/src/build.ts --android",
-    "install:electron": "deno add npm:electron && deno install --allow-scripts=npm:electron"
+    "compile": "deno run -A ./dep/aio/src/build-all.ts --build-spec=./dep/aio/src/build.ts --targets=electron",
+    "install:electron": "deno run -A ./dep/aio/src/electron-install.ts",
+    "build": "deno run -A ./dep/aio/src/build-all.ts --build-spec=./dep/aio/src/build.ts",
+    "check": "deno check src/",
+    "fmt": "deno fmt",
+    "lint": "deno lint src/ && deno run -A ./dep/aio/aiol/mod.ts",
+    "doctor": "deno run -A ./dep/aio/src/server/doctor.ts",
+    "publish": "deno run -A ./dep/aio/src/am.ts publish",
+    "ship": "deno run -A ./dep/aio/src/build/ship.ts",
+    "install:android": "deno run -A ./dep/aio/src/android-install.ts"
   },
-  "allowScripts": []
+  "allowScripts": [],
+  "build": {
+    "targets": [
+      "electron",
+      "android"
+    ]
+  }
 }

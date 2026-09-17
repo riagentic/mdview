@@ -82,6 +82,7 @@ function NameInput({ initial, placeholder, onCommit }: {
       type="text"
       className="sidebar-input"
       placeholder={placeholder}
+      aria-label={placeholder}
       onClick={(e: MouseEvent) => e.stopPropagation()}
       onKeyDown={(e: KeyboardEvent) => {
         if (e.key === 'Enter') {
@@ -119,7 +120,9 @@ function CreateRow({ kind, dir, depth, ops }: {
 
 function DeleteConfirm({ node, ops }: { node: TreeNode; ops: Ops }) {
   return (
-    <span className="sidebar-confirm" onClick={(e: MouseEvent) => e.stopPropagation()}>
+    // A pure event-stopping wrapper — `role="presentation"` says it carries no
+    // semantics of its own; the buttons inside are the interactive elements.
+    <span role="presentation" className="sidebar-confirm" onClick={(e: MouseEvent) => e.stopPropagation()}>
       <span className="sidebar-confirm-label">delete?</span>
       <button
         type="button"
@@ -181,7 +184,19 @@ function TreeRow({ node, currentPath, ops, depth }: TreeRowProps) {
         <div
           className="sidebar-dir-label"
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
+          role="treeitem"
+          aria-expanded={isOpen}
+          tabIndex={0}
           onClick={() => {
+            if (isRenaming) return
+            const prev = collapsedDirs.value
+            const has = prev.includes(node.path)
+            const next = has ? prev.filter((p) => p !== node.path) : [...prev, node.path]
+            collapsedDirs.set(next)
+          }}
+          onKeyDown={(e: KeyboardEvent) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return
+            e.preventDefault()
             if (isRenaming) return
             const prev = collapsedDirs.value
             const has = prev.includes(node.path)
@@ -196,7 +211,7 @@ function TreeRow({ node, currentPath, ops, depth }: TreeRowProps) {
           {!isRenaming && trailing}
         </div>
         {isOpen && (
-          <ul className="sidebar-dir-children">
+          <ul className="sidebar-dir-children" role="group">
             {createIn && (
               <li><CreateRow kind={createIn.kind} dir={node.path} depth={depth + 1} ops={ops} /></li>
             )}
@@ -215,7 +230,15 @@ function TreeRow({ node, currentPath, ops, depth }: TreeRowProps) {
       <div
         className="sidebar-file-label"
         style={{ paddingLeft: `${depth * 12 + 20}px` }}
+        role="treeitem"
+        aria-selected={active}
+        tabIndex={0}
         onClick={() => { if (!isRenaming) ops.onSelect(node.path) }}
+        onKeyDown={(e: KeyboardEvent) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          if (!isRenaming) ops.onSelect(node.path)
+        }}
         title={node.path}
       >
         {isRenaming
@@ -319,13 +342,21 @@ export default function Sidebar(
             searchResults.length === 0
               ? <div className="sidebar-empty">No matches</div>
               : (
-                <ul className="search-results">
+                <ul className="search-results" role="listbox" aria-label="Search results">
                   {searchResults.map((h) => (
                     <li
                       key={`${h.path}:${h.line}`}
                       className={h.path === currentPath ? 'search-hit active' : 'search-hit'}
+                      role="option"
+                      aria-selected={h.path === currentPath}
+                      tabIndex={0}
                       title={`${h.path}:${h.line}`}
                       onClick={() => onSelect(h.path)}
+                      onKeyDown={(e: KeyboardEvent) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return
+                        e.preventDefault()
+                        onSelect(h.path)
+                      }}
                     >
                       <span className="search-hit-file">{h.fileName}<span className="search-hit-line">:{h.line}</span></span>
                       <span className="search-hit-text">{h.text}</span>
@@ -340,7 +371,7 @@ export default function Sidebar(
               {tree.length === 0
                 ? (!rootCreate && <div className="sidebar-empty">No markdown files</div>)
                 : (
-                  <ul className="sidebar-tree">
+                  <ul className="sidebar-tree" role="tree" aria-label="Workspace files">
                     {tree.map((n) => (
                       <TreeRow key={n.path} node={n} currentPath={currentPath} ops={ops} depth={0} />
                     ))}

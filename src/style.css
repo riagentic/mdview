@@ -917,7 +917,6 @@ mark.search-active {
   margin: 0;
 }
 
-.sidebar-dir-label,
 .sidebar-file-label {
   display: flex;
   align-items: center;
@@ -925,6 +924,21 @@ mark.search-active {
   padding: 3px 8px;
   font-size: 13px;
   color: #1f2328;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-dir-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 13px;
+  color: #57606a;
+  font-weight: 600;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -947,12 +961,6 @@ mark.search-active {
   width: 12px;
   color: #57606a;
   font-size: 10px;
-}
-
-.sidebar-dir-label {
-  font-weight: 600;
-  color: #57606a;
-  cursor: pointer;
 }
 
 .sidebar-dir-label:hover {
