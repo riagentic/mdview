@@ -2,9 +2,9 @@ import { afterRender, batch, fade, onCleanup, onMount, Show, signal, Transition,
 import { mdview } from '../cell/mdview.ts'
 import { classifyLink, tagLinks } from '../lib/links.ts'
 import { extractHeadings } from '../lib/outline.ts'
-import { VERSION } from '../version.ts'
 import Sidebar from './Sidebar.tsx'
 import Editor from './Editor.tsx'
+import { Icon, iconSvg, type IconName } from './Icon.tsx'
 
 // ── Search state (UI-only signals, shared across components) ─────
 
@@ -120,14 +120,15 @@ function addCopyButtons(root: HTMLElement): void {
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.className = 'code-copy-btn'
-    btn.textContent = 'Copy'
     btn.setAttribute('aria-label', 'Copy code')
+    const show = (icon: IconName, label: string) => { btn.innerHTML = `${iconSvg(icon)}<span>${label}</span>` }
+    show('copy', 'Copy')
     btn.addEventListener('click', (e) => {
       e.stopPropagation()
       const done = (label: string, ok: boolean) => {
-        btn.textContent = label
+        show(ok ? 'check' : 'alert', label)
         btn.classList.toggle('copied', ok)
-        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied') }, 1200)
+        setTimeout(() => { show('copy', 'Copy'); btn.classList.remove('copied') }, 1200)
       }
       navigator.clipboard?.writeText(code.textContent ?? '')
         .then(() => done('Copied!', true))
@@ -242,24 +243,34 @@ function SearchBar() {
 
   return (
     <div className="search-bar">
-      <input
-        ref={inputRef}
-        type="text"
-        className="search-input"
-        placeholder="Search…"
-        value={query}
-        onInput={(e: InputEvent) => searchQuery.set((e.target as HTMLInputElement).value)}
-        onKeyDown={(e: KeyboardEvent) => {
-          if (e.key === 'Enter') { e.preventDefault(); goToMatch(e.shiftKey ? -1 : 1) }
-          if (e.key === 'Escape') { e.preventDefault(); closeSearch() }
-        }}
-      />
+      <div className="search-field">
+        <Icon name="search" size={14} />
+        <input
+          ref={inputRef}
+          type="text"
+          className="search-input"
+          aria-label="Find in document"
+          placeholder="Find in document"
+          value={query}
+          onInput={(e: InputEvent) => searchQuery.set((e.target as HTMLInputElement).value)}
+          onKeyDown={(e: KeyboardEvent) => {
+            if (e.key === 'Enter') { e.preventDefault(); goToMatch(e.shiftKey ? -1 : 1) }
+            if (e.key === 'Escape') { e.preventDefault(); closeSearch() }
+          }}
+        />
+      </div>
       <span className="search-count">
         {count > 0 ? `${current + 1} / ${count}` : query ? 'No matches' : ''}
       </span>
-      <button type="button" className="search-nav" onClick={() => goToMatch(-1)} disabled={count === 0} title="Previous (Shift+Enter)">▲</button>
-      <button type="button" className="search-nav" onClick={() => goToMatch(1)} disabled={count === 0} title="Next (Enter)">▼</button>
-      <button type="button" className="search-close" onClick={closeSearch} title="Close (Esc)">✕</button>
+      <div className="segmented">
+        <button type="button" className="icon-btn" onClick={() => goToMatch(-1)} disabled={count === 0} title="Previous (Shift+Enter)" aria-label="Previous match">
+          <Icon name="chevronUp" size={16} />
+        </button>
+        <button type="button" className="icon-btn" onClick={() => goToMatch(1)} disabled={count === 0} title="Next (Enter)" aria-label="Next match">
+          <Icon name="chevronDown" size={16} />
+        </button>
+      </div>
+      <button type="button" className="text-btn" onClick={closeSearch} title="Close (Esc)">Done</button>
     </div>
   )
 }
@@ -269,9 +280,50 @@ function SearchBar() {
 function ExternalChangeBanner() {
   return (
     <div className="external-banner">
-      <span className="external-banner-msg">File changed on disk.</span>
-      <button type="button" className="toolbar-btn" onClick={() => mdview.applyExternalReload()}>Reload from disk</button>
-      <button type="button" className="toolbar-btn" onClick={() => mdview.dismissExternalBanner()}>Keep my edits</button>
+      <Icon name="alert" size={16} />
+      <span className="external-banner-msg">This file changed on disk.</span>
+      <button type="button" className="btn btn-sm" onClick={() => mdview.dismissExternalBanner()}>Keep My Edits</button>
+      <button type="button" className="btn btn-sm btn-primary" onClick={() => mdview.applyExternalReload()}>
+        <Icon name="refresh" size={14} />Reload
+      </button>
+    </div>
+  )
+}
+
+// ── Controls & screens ──────────────────────────────────────
+
+// Square toolbar button: one icon, the label lives in title + aria-label.
+// Passing `active` makes it a toggle (aria-pressed); omitting it, a plain action.
+function ToolButton({ icon, label, onClick, active, disabled = false, danger = false }: {
+  icon: IconName
+  label: string
+  onClick: () => void
+  active?: boolean
+  disabled?: boolean
+  danger?: boolean
+}) {
+  const cls = ['icon-btn', active ? 'active' : '', danger ? 'danger' : ''].filter(Boolean).join(' ')
+  return (
+    <button type="button" className={cls} onClick={onClick} disabled={disabled} title={label} aria-label={label} aria-pressed={active}>
+      <Icon name={icon} />
+    </button>
+  )
+}
+
+function Welcome({ subtitle }: { subtitle: string }) {
+  return (
+    <div className="empty-content">
+      <div className="app-tile" aria-hidden="true"><Icon name="markdown" size={52} /></div>
+      <h1>mdview {mdview.version ? <span className="app-version">{mdview.version}</span> : null}</h1>
+      <p className="subtitle">{subtitle}</p>
+      <div className="empty-actions">
+        <button type="button" onClick={() => mdview.requestOpen('', 0)} className="btn btn-lg btn-primary">
+          <Icon name="file" size={16} />Open File…<kbd>Ctrl O</kbd>
+        </button>
+        <button type="button" onClick={() => mdview.requestOpenFolder()} className="btn btn-lg">
+          <Icon name="folder" size={16} />Open Folder…
+        </button>
+      </div>
     </div>
   )
 }
@@ -485,16 +537,14 @@ export default function MdviewPage() {
           {sidebar}
           <div className="empty-state main-pane">
             <div className="empty-content">
-              <div className="logo error-logo">
-                <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-                </svg>
-              </div>
-              <h1>Error</h1>
+              <div className="app-tile app-tile-error" aria-hidden="true"><Icon name="alert" size={48} /></div>
+              <h1>Can’t open this document</h1>
               <p className="subtitle error-message">{mdview.error}</p>
-              <div className="error-actions">
-                <button type="button" onClick={() => mdview.requestOpen('', getScrollY())} className="open-btn">Open Another File</button>
-                <button type="button" onClick={() => mdview.closeDoc()} className="open-btn secondary-btn">Back</button>
+              <div className="empty-actions">
+                <button type="button" onClick={() => mdview.requestOpen('', getScrollY())} className="btn btn-lg btn-primary">
+                  <Icon name="file" size={16} />Open Another File…
+                </button>
+                <button type="button" onClick={() => mdview.closeDoc()} className="btn btn-lg">Back</button>
               </div>
             </div>
           </div>
@@ -511,17 +561,7 @@ export default function MdviewPage() {
           <div className="viewer-row">
             {sidebar}
             <div className="empty-state main-pane">
-              <div className="empty-content">
-                <div className="logo">
-                  <svg width="64" height="64" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M14.85 3H1.15C.52 3 0 3.52 0 4.15v7.7C0 12.48.52 13 1.15 13h13.7c.63 0 1.15-.52 1.15-1.15V4.15C16 3.52 15.48 3 14.85 3zM9 11H7V8L5.5 9.92 4 8v3H2V5h2l1.5 2L7 5h2v6zm2.99.5L9.5 8H11V5h2v3h1.5l-2.51 3.5z"/>
-                  </svg>
-                </div>
-                <h1>mdview <span className="app-version">v{VERSION}</span></h1>
-                <p className="subtitle">Pick a file from the sidebar</p>
-                <button type="button" onClick={() => mdview.requestOpen('', 0)} className="open-btn">Open File…</button>
-                <button type="button" onClick={() => mdview.requestOpenFolder()} className="open-btn" style={{ marginLeft: 12 }}>Open Folder…</button>
-              </div>
+              <Welcome subtitle="Pick a file from the sidebar to start reading." />
             </div>
           </div>
         </div>
@@ -529,17 +569,7 @@ export default function MdviewPage() {
     }
     return (
       <div className="empty-state">
-        <div className="empty-content">
-          <div className="logo">
-            <svg width="64" height="64" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M14.85 3H1.15C.52 3 0 3.52 0 4.15v7.7C0 12.48.52 13 1.15 13h13.7c.63 0 1.15-.52 1.15-1.15V4.15C16 3.52 15.48 3 14.85 3zM9 11H7V8L5.5 9.92 4 8v3H2V5h2l1.5 2L7 5h2v6zm2.99.5L9.5 8H11V5h2v3h1.5l-2.51 3.5z"/>
-            </svg>
-          </div>
-          <h1>mdview <span className="app-version">v{VERSION}</span></h1>
-          <p className="subtitle">Markdown Viewer</p>
-          <button type="button" onClick={() => mdview.requestOpen('', 0)} className="open-btn">Open File</button>
-          <button type="button" onClick={() => mdview.requestOpenFolder()} className="open-btn" style={{ marginLeft: 12 }}>Open Folder</button>
-        </div>
+        <Welcome subtitle="A calm place to read and write Markdown." />
       </div>
     )
   }
@@ -555,58 +585,40 @@ export default function MdviewPage() {
   return (
     <div className="viewer">
       <header className="toolbar">
-        <button
-          type="button"
-          onClick={() => mdview.toggleSidebar()}
-          className={mdview.sidebarVisible ? 'toolbar-btn toolbar-btn-toggle active' : 'toolbar-btn toolbar-btn-toggle'}
-          disabled={!hasWorkspace}
-          title="Toggle sidebar (Ctrl+B)"
-        >☰</button>
-        <button type="button" onClick={() => mdview.goBack(getScrollY())} className="toolbar-btn toolbar-btn-nav" disabled={!canGoBack}
-          title={canGoBack ? `Back: ${mdview.history[mdview.historyIndex - 1]?.fileName}` : 'No history'}>←</button>
-        <button type="button" onClick={() => mdview.goForward(getScrollY())} className="toolbar-btn toolbar-btn-nav" disabled={!canGoForward}
-          title={canGoForward ? `Forward: ${mdview.history[mdview.historyIndex + 1]?.fileName}` : 'No forward history'}>→</button>
-        <span className="file-name">{mdview.fileName}{mdview.dirty ? ' •' : ''}{isRemoteDoc ? ' ↗' : ''}</span>
-        {isRemoteDoc ? null : (
-          <div className="mode-toggle" role="group" aria-label="Mode">
-            <button
-              type="button"
-              className={mode === 'view' ? 'mode-btn active' : 'mode-btn'}
-              onClick={() => mdview.setMode('view')}
-              title="View (Ctrl+E toggles)"
-              aria-label="View mode"
-            >👁</button>
-            <button
-              type="button"
-              className={mode === 'edit' ? 'mode-btn active' : 'mode-btn'}
-              onClick={() => mdview.setMode('edit')}
-              title="Edit (Ctrl+E toggles)"
-              aria-label="Edit mode"
-            >✏️</button>
+        <div className="toolbar-group">
+          <ToolButton icon="sidebar" label="Toggle sidebar (Ctrl+B)" onClick={() => mdview.toggleSidebar()}
+            active={mdview.sidebarVisible && hasWorkspace} disabled={!hasWorkspace} />
+          <div className="segmented">
+            <ToolButton icon="back" onClick={() => mdview.goBack(getScrollY())} disabled={!canGoBack}
+              label={canGoBack ? `Back to ${mdview.history[mdview.historyIndex - 1]?.fileName} (Alt+←)` : 'Back'} />
+            <ToolButton icon="forward" onClick={() => mdview.goForward(getScrollY())} disabled={!canGoForward}
+              label={canGoForward ? `Forward to ${mdview.history[mdview.historyIndex + 1]?.fileName} (Alt+→)` : 'Forward'} />
           </div>
-        )}
-        {mode === 'view'
-          ? (
-            <button
-              type="button"
-              onClick={() => outlineOpen.set(!outlineOpen.value)}
-              className={outlineOpen.value ? 'toolbar-btn toolbar-btn-toggle active' : 'toolbar-btn toolbar-btn-toggle'}
-              title="Toggle outline"
-              aria-label="Toggle document outline"
-            >⧉</button>
-          )
-          : null}
-        <button type="button" onClick={() => mdview.requestOpen('', getScrollY())} className="toolbar-btn toolbar-btn-toggle" title="Open file (Ctrl+O)" aria-label="Open file">📄</button>
-        <button type="button" onClick={() => mdview.requestOpenFolder()} className="toolbar-btn toolbar-btn-toggle" title="Open folder" aria-label="Open folder">📁</button>
-        <button
-          type="button"
-          onClick={() => mdview.toggleTheme()}
-          className="toolbar-btn toolbar-btn-toggle"
-          title="Toggle dark/light theme"
-          aria-label="Toggle theme"
-        >{mdview.theme === 'dark' ? '☀️' : '🌙'}</button>
-        <button type="button" onClick={() => (globalThis as unknown as { __aioIPC?: { print?: () => void } }).__aioIPC?.print?.()} className="toolbar-btn toolbar-btn-toggle" title="Print" aria-label="Print">🖨️</button>
-        <button type="button" onClick={() => mdview.closeDoc()} className="toolbar-btn toolbar-btn-toggle toolbar-btn-close" title="Close (Ctrl+W)" aria-label="Close document">✕</button>
+        </div>
+        <div className="toolbar-title" title={mdview.filePath}>
+          <Icon name={isRemoteDoc ? 'globe' : 'fileText'} size={16} />
+          <span className="file-name">{mdview.fileName}</span>
+          {mdview.dirty ? <span className="dirty-dot" title="Unsaved changes" aria-label="Unsaved changes" /> : null}
+        </div>
+        <div className="toolbar-group toolbar-group-end">
+          {isRemoteDoc ? null : (
+            <div className="segmented" role="group" aria-label="Mode">
+              <ToolButton icon="eye" label="Read (Ctrl+E toggles)" active={mode === 'view'} onClick={() => mdview.setMode('view')} />
+              <ToolButton icon="pencil" label="Edit (Ctrl+E toggles)" active={mode === 'edit'} onClick={() => mdview.setMode('edit')} />
+            </div>
+          )}
+          <ToolButton icon="outline" label="Toggle outline" active={mode === 'view' && outlineOpen.value}
+            disabled={mode !== 'view'} onClick={() => outlineOpen.set(!outlineOpen.value)} />
+          <span className="toolbar-sep" />
+          <ToolButton icon="file" label="Open file (Ctrl+O)" onClick={() => mdview.requestOpen('', getScrollY())} />
+          <ToolButton icon="folder" label="Open folder" onClick={() => mdview.requestOpenFolder()} />
+          <span className="toolbar-sep" />
+          <ToolButton icon={mdview.theme === 'dark' ? 'sun' : 'moon'} label={mdview.theme === 'dark' ? 'Light theme' : 'Dark theme'}
+            onClick={() => mdview.toggleTheme()} />
+          <ToolButton icon="printer" label="Print"
+            onClick={() => (globalThis as unknown as { __aioIPC?: { print?: () => void } }).__aioIPC?.print?.()} />
+          <ToolButton icon="close" label="Close document (Ctrl+W)" danger onClick={() => mdview.closeDoc()} />
+        </div>
       </header>
       <div className="viewer-row">
         {sidebar}

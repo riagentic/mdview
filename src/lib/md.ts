@@ -43,6 +43,12 @@ marked.use({
       const id = slugify(inner) // slugify strips the HTML tags → text-only slug
       return `<h${depth} id="${id}">${inner}</h${depth}>\n`
     },
+    // GFM task box as an inert <span>: the sanitizer forbids <input> (and a
+    // read-only viewer has nothing to submit), which used to drop the box
+    // entirely and leave a bare bullet. CSS draws it (.task-box).
+    checkbox({ checked }: { checked: boolean }) {
+      return `<span class="task-box${checked ? ' checked' : ''}" role="img" aria-label="${checked ? 'done' : 'not done'}"></span>`
+    },
   },
   gfm: true,
 })
@@ -53,6 +59,7 @@ const PURIFY_CONFIG = {
   ALLOWED_ATTR: [
     'href', 'src', 'alt', 'title', 'id', 'class', 'name',
     'width', 'height', 'align', 'colspan', 'rowspan', 'start', 'type',
+    'role', 'aria-label',
   ],
   FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'],
   // Allow safe schemes + ALL relative refs (bare `a/b.md`, `./x`, `../x`, `#h`),

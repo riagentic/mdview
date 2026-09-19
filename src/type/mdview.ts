@@ -45,4 +45,8 @@ export type MdviewState = {
   /** Current workspace-search query ('' = not searching) and its hits. */
   searchQuery: string
   searchResults: SearchHit[]
+  /** The running build's version (`major.minor.build[-dirty.hash]`), from
+   *  aio's `appVersion()` at boot — the same string as the artifact name and
+   *  `--version`. '' until the server has reported it. */
+  version: string
 }

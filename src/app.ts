@@ -1,6 +1,6 @@
 import { aio } from 'aio'
 import { mdview } from './cell/mdview.ts'
-import { VERSION } from './version.ts'
+import { appVersion } from 'aio/server'
 // Embed server-only helpers in deno compile (browser bundle starts from App.tsx, never reaches here)
 import './cell/mdview-io.ts'
 
@@ -31,7 +31,7 @@ await aio.run({
   // already refused at the socket layer for this local app.
   ui: {
     head: '<meta http-equiv="Content-Security-Policy" content="default-src \'self\'; base-uri \'self\'; object-src \'none\'; form-action \'self\'; script-src \'self\' \'unsafe-inline\'; style-src \'self\' \'unsafe-inline\'; img-src \'self\' data: blob: https: http:; font-src \'self\' data:; connect-src \'self\' ws: wss:">',
-    title: `mdview v${VERSION}`,
+    title: `mdview ${await appVersion()}`,
     width: 960,
     height: 720,
     showStatus: false,

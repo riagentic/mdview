@@ -1,5 +1,6 @@
 import { onCleanup, onMount, signal, useRef } from 'aio/air'
 import type { SearchHit, TreeNode } from '../type/mdview.ts'
+import { Icon } from './Icon.tsx'
 
 type Props = {
   tree: TreeNode[]
@@ -41,6 +42,11 @@ const editing = signal<Editing | null>(null, 'sidebarEditing')
 
 // Path awaiting delete confirmation ('' = none).
 const pendingDelete = signal('', 'sidebarPendingDelete')
+
+// Row geometry: indent per depth + the fixed chevron slot, so file names line
+// up with folder names at the same depth and inline inputs line up with both.
+const INDENT = 14
+const rowPad = (depth: number) => `${depth * INDENT + 8}px`
 
 function expandDir(path: string) {
   const prev = collapsedDirs.value
@@ -107,7 +113,9 @@ function CreateRow({ kind, dir, depth, ops }: {
   ops: Ops
 }) {
   return (
-    <div className="sidebar-create-row" style={{ paddingLeft: `${depth * 12 + 20}px` }}>
+    <div className="sidebar-create-row" style={{ paddingLeft: rowPad(depth) }}>
+      <span className="sidebar-chev" />
+      <Icon name={kind === 'create-file' ? 'fileText' : 'folder'} size={16} />
       <NameInput
         initial=""
         placeholder={kind === 'create-file' ? 'name.md' : 'folder name'}
@@ -128,9 +136,12 @@ function DeleteConfirm({ node, ops }: { node: TreeNode; ops: Ops }) {
         type="button"
         className="sidebar-action-btn sidebar-action-danger"
         title={node.type === 'dir' ? 'Delete folder and contents' : 'Delete file'}
+        aria-label="Confirm delete"
         onClick={() => { pendingDelete.set(''); ops.onDelete(node.path, node.type === 'dir') }}
-      >✓</button>
-      <button type="button" className="sidebar-action-btn" title="Cancel" onClick={() => pendingDelete.set('')}>✕</button>
+      ><Icon name="check" size={14} /></button>
+      <button type="button" className="sidebar-action-btn" title="Cancel" aria-label="Cancel delete" onClick={() => pendingDelete.set('')}>
+        <Icon name="close" size={14} />
+      </button>
     </span>
   )
 }
@@ -143,29 +154,33 @@ function RowActions({ node }: { node: TreeNode }) {
           type="button"
           className="sidebar-action-btn"
           title="New file"
+          aria-label="New file"
           onClick={(e: MouseEvent) => { e.stopPropagation(); startCreate('create-file', node.path) }}
-        >＋</button>
+        ><Icon name="filePlus" size={14} /></button>
       )}
       {node.type === 'dir' && (
         <button
           type="button"
           className="sidebar-action-btn"
           title="New folder"
+          aria-label="New folder"
           onClick={(e: MouseEvent) => { e.stopPropagation(); startCreate('create-folder', node.path) }}
-        >⊞</button>
+        ><Icon name="folderPlus" size={14} /></button>
       )}
       <button
         type="button"
         className="sidebar-action-btn"
         title="Rename"
+        aria-label="Rename"
         onClick={(e: MouseEvent) => { e.stopPropagation(); startRename(node.path) }}
-      >✎</button>
+      ><Icon name="rename" size={14} /></button>
       <button
         type="button"
         className="sidebar-action-btn"
         title="Delete"
+        aria-label="Delete"
         onClick={(e: MouseEvent) => { e.stopPropagation(); editing.set(null); pendingDelete.set(node.path) }}
-      >✕</button>
+      ><Icon name="trash" size={14} /></button>
     </span>
   )
 }
@@ -183,7 +198,7 @@ function TreeRow({ node, currentPath, ops, depth }: TreeRowProps) {
       <li className="sidebar-dir">
         <div
           className="sidebar-dir-label"
-          style={{ paddingLeft: `${depth * 12 + 8}px` }}
+          style={{ paddingLeft: rowPad(depth) }}
           role="treeitem"
           aria-expanded={isOpen}
           tabIndex={0}
@@ -204,7 +219,8 @@ function TreeRow({ node, currentPath, ops, depth }: TreeRowProps) {
             collapsedDirs.set(next)
           }}
         >
-          <span className="sidebar-chev">{isOpen ? '▾' : '▸'}</span>
+          <span className={isOpen ? 'sidebar-chev open' : 'sidebar-chev'}><Icon name="chevronRight" size={12} /></span>
+          <Icon name={isOpen ? 'folderOpen' : 'folder'} size={16} />
           {isRenaming
             ? <NameInput initial={node.name} placeholder="folder name" onCommit={(name) => ops.onRename(node.path, name, true)} />
             : <span className="sidebar-name">{node.name}</span>}
@@ -229,7 +245,7 @@ function TreeRow({ node, currentPath, ops, depth }: TreeRowProps) {
     <li key={node.path} className={active ? 'sidebar-file active' : 'sidebar-file'}>
       <div
         className="sidebar-file-label"
-        style={{ paddingLeft: `${depth * 12 + 20}px` }}
+        style={{ paddingLeft: rowPad(depth) }}
         role="treeitem"
         aria-selected={active}
         tabIndex={0}
@@ -241,6 +257,8 @@ function TreeRow({ node, currentPath, ops, depth }: TreeRowProps) {
         }}
         title={node.path}
       >
+        <span className="sidebar-chev" />
+        <Icon name="fileText" size={16} />
         {isRenaming
           ? <NameInput initial={node.name} placeholder="name.md" onCommit={(name) => ops.onRename(node.path, name, false)} />
           : <span className="sidebar-name">{node.name}</span>}
@@ -313,19 +331,27 @@ export default function Sidebar(
   return (
     <aside ref={rootRef} className="sidebar" style={{ width: `${width}px` }}>
       <div className="sidebar-header" title={workspaceDir}>
-        <span className="sidebar-header-label">{label || 'workspace'}</span>
-        <span className="sidebar-actions sidebar-header-actions">
-          <button type="button" className="sidebar-action-btn" title="New file" onClick={() => startCreate('create-file', workspaceDir)}>＋</button>
-          <button type="button" className="sidebar-action-btn" title="New folder" onClick={() => startCreate('create-folder', workspaceDir)}>⊞</button>
+        <span className="sidebar-header-label">{label || 'Workspace'}</span>
+        <span className="sidebar-header-actions">
+          <button type="button" className="sidebar-action-btn" title="New file" aria-label="New file" onClick={() => startCreate('create-file', workspaceDir)}>
+            <Icon name="filePlus" size={16} />
+          </button>
+          <button type="button" className="sidebar-action-btn" title="New folder" aria-label="New folder" onClick={() => startCreate('create-folder', workspaceDir)}>
+            <Icon name="folderPlus" size={16} />
+          </button>
         </span>
       </div>
       {fsError && (
         <div className="sidebar-error">
+          <Icon name="alert" size={16} />
           <span className="sidebar-error-msg">{fsError}</span>
-          <button type="button" className="sidebar-action-btn" title="Dismiss" onClick={onDismissError}>✕</button>
+          <button type="button" className="sidebar-action-btn" title="Dismiss" aria-label="Dismiss error" onClick={onDismissError}>
+            <Icon name="close" size={14} />
+          </button>
         </div>
       )}
       <div className="sidebar-search">
+        <Icon name="search" size={14} />
         <input
           ref={searchRef}
           type="search"
@@ -334,7 +360,13 @@ export default function Sidebar(
           aria-label="Search workspace files"
           onInput={(e) => doSearch((e.target as HTMLInputElement).value)}
         />
-        {searchQuery ? <button type="button" className="sidebar-action-btn" title="Clear search" onClick={clearSearch}>✕</button> : null}
+        {searchQuery
+          ? (
+            <button type="button" className="search-clear" title="Clear search" aria-label="Clear search" onClick={clearSearch}>
+              <Icon name="close" size={12} />
+            </button>
+          )
+          : null}
       </div>
       <div className="sidebar-scroll">
         {searchQuery
@@ -358,7 +390,7 @@ export default function Sidebar(
                         onSelect(h.path)
                       }}
                     >
-                      <span className="search-hit-file">{h.fileName}<span className="search-hit-line">:{h.line}</span></span>
+                      <span className="search-hit-file"><Icon name="fileText" size={14} />{h.fileName}<span className="search-hit-line">:{h.line}</span></span>
                       <span className="search-hit-text">{h.text}</span>
                     </li>
                   ))}

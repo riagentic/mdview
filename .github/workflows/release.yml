@@ -1,0 +1,98 @@
+# Release: push a `v*` tag → check, build Linux / Windows / macOS on GitHub's
+# runners, publish every artifact to a GitHub release. Manual runs
+# (workflow_dispatch) build and keep the artifacts on the run, without a release.
+#
+# aio is vendored locally as `dep/aio` → ~/.local/lib/aio-versions/<tag> (a
+# checkout of the framework repo at that tag, gitignored here). CI recreates
+# the same layout by checking out riagentic/aio at deno.json's `aioVersion`.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DENO_VERSION: v2.9.x # aio's minimum is 2.9.0
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: aio
+        run: echo "ref=$(jq -r .aioVersion deno.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: riagentic/aio
+          ref: ${{ steps.aio.outputs.ref }}
+          path: dep/aio
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: ${{ env.DENO_VERSION }}
+      - run: deno install
+      - run: deno task check # deno check + the client-graph audit
+      - run: deno task lint # deno lint + aiol
+      - run: deno task test
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows is cross-built on Linux — the path the test VMs verified.
+          - { name: linux, os: ubuntu-latest, platforms: linux }
+          - { name: windows, os: ubuntu-latest, platforms: windows }
+          # A Mac runner makes the real .dmg with its own hdiutil, for both archs.
+          - { name: macos, os: macos-latest, platforms: 'macos,macos-arm64' }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the build number is `git rev-list --count HEAD`
+      - id: aio
+        run: echo "ref=$(jq -r .aioVersion deno.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: riagentic/aio
+          ref: ${{ steps.aio.outputs.ref }}
+          path: dep/aio
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: ${{ env.DENO_VERSION }}
+      - run: deno install
+      - run: deno task build --targets=electron --platforms=${{ matrix.platforms }}
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1' # appimagetool without FUSE (runners have none)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mdview-${{ matrix.name }}
+          path: dist/mdview-*
+          if-no-files-found: error
+          compression-level: 0 # already compressed; saves minutes
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - run: cd out && sha256sum mdview-* > SHA256SUMS && cat SHA256SUMS
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" out/*
+          --repo "$GITHUB_REPOSITORY"
+          --title "mdview $GITHUB_REF_NAME"
+          --generate-notes
