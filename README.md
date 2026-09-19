@@ -6,6 +6,13 @@ Built with Deno + Electron on the [aio](https://github.com/riagentic/aio) framew
 
 ![mdview — workspace sidebar and rendered markdown in dark theme](mdview.png)
 
+## Download
+
+Linux (AppImage), Windows (`.zip` or one-file `.exe`) and macOS (`.dmg`, Intel
+and Apple Silicon) builds are on the
+[Releases](https://github.com/riagentic/mdview/releases) page. The macOS app is
+not notarized: right-click → Open the first time.
+
 ## Usage
 
 ```sh
@@ -35,14 +42,14 @@ mdview
 | Ctrl+Scroll | Zoom in / out |
 | Ctrl+W | Close document |
 
-Print and theme toggle (🌙/☀️) are on the toolbar.
+Print and the light/dark theme toggle are on the toolbar.
 
 ## Features
 
 - **Workspace sidebar** — folder file tree with create / rename / delete (inline UI); resizable, persisted width
 - **Cross-file search** — search `.md` content across the whole workspace from the sidebar, jump to any hit
 - **Document outline** — resizable table-of-contents panel; click a heading to jump
-- **Remote & external links** — open a remote `.md` in-app (fetched & rendered), web pages in the system browser; link markers show the destination (↗ web, ⤓ remote md, ✉ mail)
+- **Remote & external links** — open a remote `.md` in-app (fetched & rendered), web pages in the system browser; link markers show the destination (web, remote md, mail)
 - **Inline editor** — markdown syntax highlighting, debounced autosave, external-change detection & reload
 - **Navigation** — clickable relative links between docs, in-document anchors, back/forward history with scroll restoration
 - **Dark / light theme** — toggle on the toolbar, persisted across sessions
@@ -51,7 +58,7 @@ Print and theme toggle (🌙/☀️) are on the toolbar.
 - In-document text search with match navigation
 - Zoom (25% – 300%) via keyboard and mouse wheel
 - Session persistence — reopens last document/workspace, scroll position, zoom, theme, and sidebar state
-- Native OS file/folder dialog (zenity / kdialog)
+- Native OS file/folder dialog on Linux, Windows and macOS (aio `pickFile`)
 - Window position/size persistence and print support
 
 ## Development
@@ -79,7 +86,7 @@ deno task build --targets=android
 ## Stack
 
 - Deno 2.9+ / TypeScript / Electron
-- [aio](https://github.com/riagentic/aio) `v1.0.2-beta` — AIR renderer, state management, persistence
+- [aio](https://github.com/riagentic/aio) `v1.0.5-beta` — AIR renderer, state management, persistence
 - [marked](https://github.com/markedjs/marked) — markdown parsing
 - [highlight.js](https://highlightjs.org/) — syntax highlighting
 - [dompurify](https://github.com/cure53/DOMPurify) + [jsdom](https://github.com/jsdom/jsdom) `^26` — HTML sanitization

@@ -1,4 +1,8 @@
 import { log } from 'aio'
+import { type PickFilter, type PickOptions, pickDirectory, pickFile } from 'aio/server'
+
+// The running build's version (deno.json major.minor + commit count), for onInit.
+export { appVersion } from 'aio/server'
 import { basename, dirname, isAbsolute, join, resolve } from '@std/path'
 import { renderMarkdown } from '../lib/md.ts'
 import type { SearchHit, TreeNode } from '../type/mdview.ts'
@@ -158,54 +162,26 @@ async function inlineImageTag(tag: string, baseDir: string): Promise<string> {
   }
 }
 
-let dialogTool: 'zenity' | 'kdialog' | null | undefined
-async function detectDialogTool(): Promise<'zenity' | 'kdialog' | null> {
-  if (dialogTool !== undefined) return dialogTool
-  for (const tool of ['zenity', 'kdialog'] as const) {
-    try {
-      const { code } = await new Deno.Command('which', { args: [tool], stdout: 'null', stderr: 'null' }).output()
-      if (code === 0) { dialogTool = tool; return tool }
-    } catch { /* not found */ }
+// Native open dialogs come from aio's `pickFile`/`pickDirectory`: Windows
+// PowerShell, macOS osascript, Linux zenity/kdialog. `null` = the user
+// cancelled; a missing dialog tool THROWS (naming what to install) so the
+// caller can show it instead of a button that silently does nothing.
+
+const MARKDOWN_FILTER: PickFilter = { name: 'Markdown', extensions: ['md', 'markdown', 'mkd', 'mdown', 'txt'] }
+
+/** Dialog options for an open dialog: title, start dir (omitted when unknown),
+ *  and the Markdown filter for file picks. Pure — the one part worth testing. */
+export function pickOptions(kind: 'file' | 'folder', startDir = ''): PickOptions {
+  return {
+    title: kind === 'file' ? 'Open Markdown' : 'Open Folder',
+    ...(startDir ? { startIn: startDir } : {}),
+    ...(kind === 'file' ? { filters: [MARKDOWN_FILTER] } : {}),
   }
-  dialogTool = null
-  return null
 }
 
-export async function folderDialog(startDir = ''): Promise<string | null> {
-  const tool = await detectDialogTool()
-  if (!tool) {
-    log.warn('mdview', 'No folder dialog available (install zenity or kdialog)')
-    return null
-  }
-  const args = tool === 'zenity'
-    ? ['--file-selection', '--directory', '--title=Select Folder', ...(startDir ? [`--filename=${startDir.endsWith('/') ? startDir : startDir + '/'}`] : [])]
-    : ['--getexistingdirectory', startDir || '.']
-  const cmd = new Deno.Command(tool, { args, stdout: 'piped', stderr: 'null' })
-  const { code, stdout } = await cmd.output()
-  if (code !== 0) return null
-  return new TextDecoder().decode(stdout).trim()
-}
+export const folderDialog = (startDir = ''): Promise<string | null> => pickDirectory(pickOptions('folder', startDir))
 
-export async function fileDialog(startDir = ''): Promise<string | null> {
-  const tool = await detectDialogTool()
-  if (!tool) {
-    log.warn('mdview', 'No file dialog available (install zenity or kdialog)')
-    return null
-  }
-  const filter = 'Markdown | *.md *.markdown *.mkd *.mdown *.txt'
-  const args = tool === 'zenity'
-    ? [
-        '--file-selection',
-        '--title=Open Markdown',
-        `--file-filter=${filter}`,
-        ...(startDir ? [`--filename=${startDir.endsWith('/') ? startDir : startDir + '/'}`] : []),
-      ]
-    : ['--getopenfilename', startDir || '.', 'Markdown (*.md *.markdown *.mkd *.mdown *.txt)']
-  const cmd = new Deno.Command(tool, { args, stdout: 'piped', stderr: 'null' })
-  const { code, stdout } = await cmd.output()
-  if (code !== 0) return null
-  return new TextDecoder().decode(stdout).trim()
-}
+export const fileDialog = (startDir = ''): Promise<string | null> => pickFile(pickOptions('file', startDir))
 
 // Schemes handed to the OS: http(s) → browser, mailto/tel → mail/phone app.
 // Anything else (file:, javascript:, …) is refused so a document can't make the

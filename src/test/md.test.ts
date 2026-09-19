@@ -150,3 +150,10 @@ Deno.test('renderMarkdown: sanity — returns a string', () => {
   const out = renderMarkdown('plain text')
   assertEquals(typeof out, 'string')
 })
+
+Deno.test('md: GFM task items render an inert box, never an <input>', () => {
+  const html = renderMarkdown('- [x] done\n- [ ] todo\n')
+  assertStringIncludes(html, '<span class="task-box checked"')
+  assertStringIncludes(html, '<span class="task-box"')
+  assert(!/<input/i.test(html))
+})

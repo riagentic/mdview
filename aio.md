@@ -1,10 +1,58 @@
 # aio framework notes (from mdview compat passes)
 
-Project verified against **aio v1.0.2-beta** (`dep/aio` →
-`~/.local/lib/aio-versions/v1.0.2-beta`).
+Project verified against **aio v1.0.5-beta** (`dep/aio` →
+`~/.local/lib/aio-versions/v1.0.5-beta`).
 Status: ✅ fully compatible. Checks: `deno check` ✓ · `aiol` 0 warnings / 0 hints ✓ ·
 89/89 tests ✓ · `am fix --dry-run` clean ✓ · boots (source), errors=0 and zero
 renderer warnings ✓.
+
+## Version & releases
+
+- The UI shows aio's `appVersion()` (`aio/server`) — reported into cell state
+  by `onInit` (`setVersion`) and used for the window title. The hand-kept
+  `src/version.ts` is gone; the one version is deno.json `major.minor` + the
+  commit count, identical to the artifact names and `--version`.
+- `.github/workflows/release.yml`: a `v*` tag builds Linux + Windows (cross, on
+  ubuntu) and macOS x64 + arm64 (`.dmg` via the runner's own hdiutil) and
+  publishes a GitHub release. CI recreates `dep/aio` by checking out
+  riagentic/aio at deno.json `aioVersion`, and needs `fetch-depth: 0` or every
+  build would be number 1. `APPIMAGE_EXTRACT_AND_RUN=1` because runners have no
+  FUSE. Tag = `v<major.minor>.<commit count>` so it matches the build.
+
+## v1.0.4-beta → v1.0.5-beta — nothing to port
+
+`am pin v1.0.5-beta`; surface identical. aio now OWNS the Electron version
+(`am pin`/`am fix` keep deno.json + node_modules at its tested 44.4.1 —
+already there). Fixes that matter here: a packaged Windows app no longer opens
+a PowerShell console window behind `pickFile`/`pickDirectory` (it attaches to
+one windowless console at boot). Dev still warns once per session
+`own: 'mdview:watcher' was already held …` when a second folder is opened —
+the replace IS intended (one watcher at a time); no API declares that.
+
+## v1.0.3-beta → v1.0.4-beta — nothing to port (the macOS round)
+
+`am pin v1.0.4-beta`; surface identical. Taken alongside it:
+- **Electron pinned exactly to `44.4.1`** (was `^41.1.0`, resolved 41.10.4) —
+  the one version aio 1.0.4 builds, tests and verified on a real macOS guest.
+- The `peek()` guards around `matchCount`/`currentMatch` are gone — 1.0.4 no
+  longer warns on a same-value primitive `set`.
+- macOS: `AIO_MACOS_SSH=aio-macos deno task build --targets=electron
+  --platforms=windows,macos` gives a signed (ad-hoc) `.app` in a real `.dmg`
+  (made by `hdiutil` on the Mac over SSH); without a Mac it is a `.zip`.
+- **File/folder dialogs moved to aio's `pickFile`/`pickDirectory`** (`aio/server`,
+  new import-map entry). The hand-rolled zenity/kdialog wrapper returned `null`
+  on Windows/macOS, so Open File silently did nothing there. aio uses
+  PowerShell / osascript / zenity|kdialog, returns `null` only on Cancel, and
+  THROWS when no dialog exists — mdview shows that as the error screen.
+- New dev WARN "heap ceiling is 4.1 GB but this machine allows …" when started
+  by plain `deno run` — informational; a Markdown viewer needs no bigger heap.
+
+## v1.0.2-beta → v1.0.3-beta — nothing to port
+
+Public surface byte-identical (the Windows release). `am pin v1.0.3-beta` was
+the whole upgrade: deno.json `aioVersion` + the lock's aio link. `am fix` clean.
+aio's dev renderer contrast check (WCAG AA 4.5:1) flags app-palette pairs in
+the log — the redesigned tokens in `style.css` pass it in both themes.
 
 ## alpha75 → v1.0.2-beta — what actually changed for this app
 

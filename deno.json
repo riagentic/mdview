@@ -1,5 +1,5 @@
 {
-  "aioVersion": "v1.0.2-beta",
+  "aioVersion": "v1.0.5-beta",
   "title": "mdview",
   "version": "0.3",
   "nodeModulesDir": "auto",
@@ -15,9 +15,10 @@
     "strict": true
   },
   "imports": {
-    "electron": "npm:electron@^41.1.0",
+    "electron": "npm:electron@44.4.1",
     "aio": "./dep/aio/mod.ts",
     "aio/air": "./dep/aio/src/air.ts",
+    "aio/server": "./dep/aio/src/server-entry.ts",
     "aio/testing": "./dep/aio/src/cell-test.ts",
     "aio/jsx-runtime": "./dep/aio/src/jsx-runtime.ts",
     "immer": "npm:immer@10.2.0",

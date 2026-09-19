@@ -71,6 +71,7 @@ export const mdview = cell('mdview', {
     loading: false,
     searchQuery: '',
     searchResults: [] as SearchHit[],
+    version: '',
   } satisfies MdviewState,
 
   persist: {
@@ -97,8 +98,8 @@ export const mdview = cell('mdview', {
       s.zoom = zoom
     },
 
-    // Hand a web/mail link to the system browser (server spawns xdg-open, like
-    // the file dialogs). Pure side effect — no state change.
+    // Hand a web/mail link to the system browser (server spawns the OS opener:
+    // open / start / xdg-open). Pure side effect — no state change.
     async openExternal(_s: MdviewState, url = '') {
       if (!url) return
       const { openExternalUrl, formatError } = await loadHelpers()
@@ -158,8 +159,15 @@ export const mdview = cell('mdview', {
       // live state, so capture it while the draft is still un-suspended rather
       // than reading s.* after `loadHelpers()` (aiol's post-await read hint).
       const startDir = s.workspaceDir || s.lastDir
-      const { folderDialog, scanTree, watchWorkspace } = await loadHelpers()
-      const dir = await folderDialog(startDir)
+      const { folderDialog, scanTree, watchWorkspace, formatError } = await loadHelpers()
+      let dir: string | null
+      try {
+        dir = await folderDialog(startDir)
+      } catch (err) { // no dialog tool, or it crashed — say so, don't no-op
+        log.error('mdview', `Folder dialog failed — ${formatError(err)}`)
+        s.error = formatError(err)
+        return
+      }
       if (!dir) return
       s.workspaceDir = dir
       s.tree = await scanTree(dir)
@@ -192,7 +200,14 @@ export const mdview = cell('mdview', {
 
       let targetPath = filePath
       if (!targetPath) {
-        const path = await fileDialog(startDir)
+        let path: string | null
+        try {
+          path = await fileDialog(startDir)
+        } catch (err) { // no dialog tool, or it crashed — say so, don't no-op
+          log.error('mdview', `File dialog failed — ${formatError(err)}`)
+          s.error = formatError(err)
+          return
+        }
         if (!path) return
         targetPath = path
       }
@@ -591,6 +606,12 @@ export const mdview = cell('mdview', {
       }
     },
 
+    // Boot-only: onInit reports aio's appVersion() (server-side) into state so
+    // the UI shows the build's real version, not a hand-kept constant.
+    setVersion(s: MdviewState, version = '') {
+      s.version = version
+    },
+
     dismissExternalBanner(s: MdviewState) {
       if (!hasDoc(s)) return
       s.externallyChanged = false
@@ -605,7 +626,8 @@ export const mdview = cell('mdview', {
     // the single async IIFE: the helpers module is never reachable from the
     // browser bundle. Dispatches once resolution completes.
     ;(async () => {
-      const { cliArg, resolveCliArg } = await loadHelpers()
+      const { appVersion, cliArg, resolveCliArg } = await loadHelpers()
+      app.dispatch(mdview.setVersion.action(await appVersion()))
       const arg = cliArg()
 
       if (arg) {
