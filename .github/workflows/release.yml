@@ -37,7 +37,7 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: ${{ env.DENO_VERSION }}
-      - run: deno install
+      - run: deno install --frozen # an incomplete deno.lock fails here, not as a -dirty release
       - run: deno task check # deno check + the client-graph audit
       - run: deno task lint # deno lint + aiol
       - run: deno task test
@@ -68,7 +68,10 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: ${{ env.DENO_VERSION }}
-      - run: deno install
+      - run: deno install --frozen
+      # The version is derived from the tree: any change here would ship as
+      # `-dirty.<hash>`. Refuse instead of publishing a mislabelled release.
+      - run: git status --porcelain && test -z "$(git status --porcelain)"
       - run: deno task build --targets=electron --platforms=${{ matrix.platforms }}
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1' # appimagetool without FUSE (runners have none)
