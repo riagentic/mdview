@@ -22,6 +22,17 @@ const isRemote = (p: string): boolean => /^https?:\/\//i.test(p)
 // app states ('empty' | 'viewing') that the removed state machine encoded.
 const hasDoc = (s: MdviewState): boolean => !!s.filePath
 
+// ONE representation of the document in state at a time: the view renders
+// `html`, the editor renders `rawText`, and the mode switch re-derives the
+// other (render from text / re-read the file). Cell state is pushed to the
+// client on change, and keeping both meant a 746 KB file cost 1.6 MB of state
+// — 887 KB html + 750 KB text — over aio's 1 MB frame budget.
+// Unsaved text is never dropped: a dirty buffer keeps `rawText` in view mode.
+function trimForMode(s: MdviewState): void {
+  if (s.mode === 'edit') s.html = ''
+  else if (!s.dirty && !s.externallyChanged) s.rawText = ''
+}
+
 // ── Cell ───────────────────────────────────────────────────────────
 
 export const mdview = cell('mdview', {
@@ -142,8 +153,41 @@ export const mdview = cell('mdview', {
       s.outlineWidth = Math.max(160, Math.min(560, Math.round(px)))
     },
 
-    setMode(s: MdviewState, mode: Mode = 'view') {
-      s.mode = mode
+    /** Switch view ⇄ edit. Async because each mode needs the representation
+     *  the other one dropped (see trimForMode): edit re-reads the file, view
+     *  re-renders the text. The mode flips only once its payload is in hand,
+     *  so the pane never renders empty. */
+    async setMode(s: MdviewState, mode: Mode = 'view') {
+      const target: Mode = mode === 'edit' ? 'edit' : 'view'
+      const current = s.mode
+      const filePath = s.filePath
+      const html = s.html
+      const rawText = s.rawText
+      if (target === current || !filePath) { s.mode = target; return }
+      // Remote docs are read-only and have no file to re-read.
+      if (target === 'edit' && isRemote(filePath)) return
+
+      const { readRaw, renderMd, formatError } = await loadHelpers()
+      try {
+        if (target === 'edit') {
+          if (!rawText) {
+            const { raw, mtime } = await readRaw(filePath)
+            s.rawText = raw
+            s.loadedMtime = mtime
+          }
+          s.mode = 'edit'
+          s.html = ''
+        } else {
+          if (!html) s.html = await renderMd(rawText, filePath)
+          s.mode = 'view'
+          // aio-ok: live re-read — the editor's flush (saveEdit) can land while
+          // the render above awaits, and unsaved text must survive the switch.
+          if (!s.dirty && !s.externallyChanged) s.rawText = ''
+        }
+      } catch (err) {
+        log.error('mdview', `Mode switch failed: ${filePath} — ${formatError(err)}`)
+        s.error = formatError(err)
+      }
     },
 
     toggleTheme(s: MdviewState) {
@@ -184,9 +228,11 @@ export const mdview = cell('mdview', {
       s.mode = 'view'
       s.history = []
       s.historyIndex = -1
-      // Same id ⇒ previous watcher's disposer runs first; auto-disposed on
+      // Previous watcher’s disposer runs first; auto-disposed on
       // cell disable and app shutdown (AIO-382).
-      s.$do(own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged())))
+      // replace: true — one watcher at a time IS the intent (1.0.6 option); the
+      // previous one is disposed first either way.
+      s.$do(own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged()), { replace: true }))
     },
 
     async requestOpen(s: Draft, filePath = '', scrollY = 0, mode?: Mode) {
@@ -225,6 +271,7 @@ export const mdview = cell('mdview', {
         s.fileName = result.fileName
         s.rawText = result.raw
         s.loadedMtime = result.mtime
+        trimForMode(s)
         s.scrollY = scrollY
         s.error = null
         s.externallyChanged = false
@@ -279,6 +326,7 @@ export const mdview = cell('mdview', {
         s.fileName = result.fileName
         s.rawText = result.raw
         s.loadedMtime = result.mtime
+        trimForMode(s)
         s.scrollY = 0
         s.error = null
         s.externallyChanged = false
@@ -314,6 +362,7 @@ export const mdview = cell('mdview', {
         s.fileName = result.fileName
         s.rawText = result.raw
         s.loadedMtime = result.mtime
+        trimForMode(s)
         s.scrollY = entryScrollY
         s.error = null
         s.externallyChanged = false
@@ -349,6 +398,7 @@ export const mdview = cell('mdview', {
         s.fileName = result.fileName
         s.rawText = result.raw
         s.loadedMtime = result.mtime
+        trimForMode(s)
         s.scrollY = entryScrollY
         s.error = null
         s.externallyChanged = false
@@ -383,7 +433,9 @@ export const mdview = cell('mdview', {
       // mdview holds a single open workspace (s.workspaceDir is one path), so
       // replace-on-set IS the previous dir's disposal, like own.dispose above.
       // aiol-ok: one mdview:watcher at a time
-      s.$do(own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged())))
+      // replace: true — one watcher at a time IS the intent (1.0.6 option); the
+      // previous one is disposed first either way.
+      s.$do(own.set('mdview:watcher', () => watchWorkspace(dir, () => mdview.fsChanged()), { replace: true }))
     },
 
     // Watcher callback lands here; debounced follow-ups via same-id replace.
@@ -560,6 +612,7 @@ export const mdview = cell('mdview', {
       const isCurrent = targetPath === filePath
       const loadedMtime = s.loadedMtime
       const userAcked = s.userAckedExternal
+      const editing = s.mode === 'edit'
       const { writeMarkdownFile, statMtime, renderMd, formatError } = await loadHelpers()
       try {
         if (isCurrent) {
@@ -577,7 +630,10 @@ export const mdview = cell('mdview', {
         if (isCurrent) {
           // Only update state for current file's save.
           s.rawText = text
-          s.html = await renderMd(text, filePath)
+          // Re-render only when the view is what's on screen; in edit mode the
+          // switch back re-derives it (setMode), so this is wasted work per
+          // keystroke-debounce on a large file.
+          s.html = editing ? '' : await renderMd(text, filePath)
           s.loadedMtime = newMtime
           s.dirty = false
           s.externallyChanged = false
@@ -600,6 +656,7 @@ export const mdview = cell('mdview', {
         s.externallyChanged = false
         s.dirty = false
         s.userAckedExternal = false
+        trimForMode(s)
       } catch (err) {
         log.error('mdview', `Reload failed: ${filePath} — ${formatError(err)}`)
         s.error = formatError(err)

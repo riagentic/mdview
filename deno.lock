@@ -28,7 +28,9 @@
     "npm:highlight.js@11": "11.11.1",
     "npm:immer@10.2.0": "10.2.0",
     "npm:jsdom@26": "26.1.0",
-    "npm:marked@14": "14.1.4"
+    "npm:marked@14": "14.1.4",
+    "npm:react-dom@19.1.0": "19.1.0_react@19.1.0",
+    "npm:react@19.1.0": "19.1.0"
   },
   "jsr": {
     "@b-fuze/deno-dom@0.1.56": {
@@ -474,6 +476,16 @@
     "punycode@2.3.1": {
       "integrity": "sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg=="
     },
+    "react-dom@19.1.0_react@19.1.0": {
+      "integrity": "sha512-Xs1hdnE+DyKgeHJeJznQmYMIBG3TKIHJJT95Q58nHLSrElKlGQqDTR2HQ9fx5CN/Gk6Vh/kupBTDLU11/nDk/g==",
+      "dependencies": [
+        "react",
+        "scheduler"
+      ]
+    },
+    "react@19.1.0": {
+      "integrity": "sha512-FS+XFBNvn3GTAWq26joslQgWNoFu08F4kl0J4CgdNKADkdSGXQyTCnKteIAJy96Br6YbpEU1LSzV5dYtjMkMDg=="
+    },
     "rrweb-cssom@0.8.0": {
       "integrity": "sha512-guoltQEx+9aMf2gDZ0s62EcV8lsXR+0w8915TC3ITdn2YueuNjdAYh/levpU9nFaoChh9RUS5ZdQMrKfVEN9tw=="
     },
@@ -485,6 +497,9 @@
       "dependencies": [
         "xmlchars"
       ]
+    },
+    "scheduler@0.26.0": {
+      "integrity": "sha512-NlHwttCI/l5gCPR3D1nNXtWABUmBwvZpEQiD4IXSbIDq8BzLIK/7Ir5gTFSGZDUu37K5cMNp0hFtzO38sC7gWA=="
     },
     "semver@7.8.5": {
       "integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
@@ -581,7 +596,7 @@
       "npm:marked@14"
     ],
     "links": {
-      "jsr:@riagentic/aio@1.0.5-beta": {
+      "jsr:@riagentic/aio@1.0.6-beta": {
         "dependencies": [
           "jsr:@std/assert@1.0.19",
           "jsr:@std/jsonc@1.0.2",
@@ -590,7 +605,9 @@
           "jsr:@std/yaml@1.0.9",
           "npm:esbuild@0.24.2",
           "npm:happy-dom@17.6.3",
-          "npm:immer@10.2.0"
+          "npm:immer@10.2.0",
+          "npm:react-dom@19.1.0",
+          "npm:react@19.1.0"
         ]
       }
     }

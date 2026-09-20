@@ -95,7 +95,16 @@ Deno.test('renderMarkdown: keeps fenced code blocks with highlight', () => {
 
 Deno.test('renderMarkdown: preserves heading anchors for in-doc nav', () => {
   const out = renderMarkdown('## My Section')
-  assertStringIncludes(out, 'id="my-section"')
+  assertStringIncludes(out, 'id="user-content-my-section"')
+})
+
+// A heading whose slug collides with a property of `document` ("links",
+// "title", "body", …) used to lose its id to DOMPurify's clobbering guard, and
+// with it its anchor and its outline entry. The prefix keeps every id.
+Deno.test('renderMarkdown: a DOM-clobbering slug keeps its anchor', () => {
+  for (const word of ['Links', 'Title', 'Body', 'Images']) {
+    assertStringIncludes(renderMarkdown(`## ${word}`), `id="user-content-${word.toLowerCase()}"`)
+  }
 })
 
 Deno.test('renderMarkdown: strips <object> and <embed>', () => {
@@ -143,7 +152,7 @@ Deno.test('renderMarkdown: headings render inline formatting', () => {
   assertStringIncludes(out, '<code>code</code>')
   assertStringIncludes(out, '<strong>bold</strong>')
   assertStringIncludes(out, '<a href="y.md">x</a>')
-  assertStringIncludes(out, 'id="title-with-code-and-bold-and-x"') // text-only slug intact
+  assertStringIncludes(out, 'id="user-content-title-with-code-and-bold-and-x"') // text-only slug intact
 })
 
 Deno.test('renderMarkdown: sanity — returns a string', () => {

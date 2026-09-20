@@ -1,4 +1,4 @@
-import { assert, assertEquals } from '@std/assert'
+import { assert, assertEquals, assertStringIncludes } from '@std/assert'
 import { bootCells, testCell } from 'aio/testing'
 import { mdview } from '../cell/mdview.ts'
 
@@ -197,7 +197,10 @@ Deno.test('[mdview] saveEdit cross-file flush preserves edits, leaves current fi
     assertEquals(mdview.filePath, fileB)          // still on fileB
     assertEquals(mdview.externallyChanged, false) // no phantom banner
     assertEquals(mdview.dirty, false)
-    assertEquals(mdview.rawText, 'B original\n')  // current text uncorrupted
+    // The view holds the current file; its text is re-read on the edit switch
+    // (one representation at a time — see trimForMode).
+    assertStringIncludes(mdview.html, 'B original')
+    assertEquals(mdview.rawText, '')
   } finally {
     await Deno.remove(dir, { recursive: true })
   }
@@ -259,4 +262,37 @@ testCell(mdview, 'random actions: core invariants hold', (t) => {
   t.expect.invariant(s => s.error === null || typeof s.error === 'string')
   t.expect.invariant(s => Array.isArray(s.history))
   t.expect.invariant(s => typeof s.filePath === 'string')
+})
+
+// Cell state is pushed to the client on change, so the document is held ONCE:
+// the view's html or the editor's text, never both (a 746 KB file used to cost
+// 1.6 MB of state). The mode switch re-derives whichever side is missing.
+Deno.test('[mdview] state holds one representation of the document per mode', async () => {
+  await using h = await bootCells([mdview])
+  const dir = await Deno.makeTempDir()
+  const file = `${dir}/doc.md`
+  try {
+    await Deno.writeTextFile(file, '# Heading\n\nbody text\n')
+    await mdview.requestOpen(file, 0)
+    await h.settle()
+    assertStringIncludes(mdview.html, 'Heading')
+    assertEquals(mdview.rawText, '', 'view mode keeps no raw text')
+
+    await mdview.setMode('edit')
+    await h.settle()
+    assertEquals(mdview.mode, 'edit')
+    assertStringIncludes(mdview.rawText, 'body text', 'edit mode re-reads the file')
+    assertEquals(mdview.html, '', 'edit mode keeps no rendered html')
+
+    await mdview.saveEdit('# Heading\n\nedited text\n')
+    await h.settle()
+    assertEquals(mdview.html, '', 'a save while editing does not render the view')
+
+    await mdview.setMode('view')
+    await h.settle()
+    assertStringIncludes(mdview.html, 'edited text', 'view re-renders the edited text')
+    assertEquals(mdview.rawText, '')
+  } finally {
+    await Deno.remove(dir, { recursive: true })
+  }
 })

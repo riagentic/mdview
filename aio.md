@@ -1,10 +1,30 @@
 # aio framework notes (from mdview compat passes)
 
-Project verified against **aio v1.0.5-beta** (`dep/aio` →
-`~/.local/lib/aio-versions/v1.0.5-beta`).
+Project verified against **aio v1.0.6-beta** (`dep/aio` →
+`~/.local/lib/aio-versions/v1.0.6-beta`).
 Status: ✅ fully compatible. Checks: `deno check` ✓ · `aiol` 0 warnings / 0 hints ✓ ·
 89/89 tests ✓ · `am fix --dry-run` clean ✓ · boots (source), errors=0 and zero
 renderer warnings ✓.
+
+## v1.0.5-beta → v1.0.6-beta — nothing to port (additive only)
+
+`am pin v1.0.6-beta`. Two things mdview had reported are fixed and taken here:
+the Windows native dialog now opens from Electron, parented to the window (it
+used to appear behind the app), and `own.set(…, { replace: true })` states that
+the watcher replace is intended, so the dev warning is gone. 1.0.6 also refuses
+mistyped config shapes at boot — mdview's config passes.
+
+That warning — `WARN broadcast  a full-state frame is 1.6 MB — over the 1.0 MB
+budget. Largest cell(s): "mdview"` — was a real defect and is fixed: the cell
+held the rendered html AND the raw text at once. It now holds one
+representation per mode (`trimForMode`), and `setMode` re-derives the other.
+746 KB file: 1676 KB → 932 KB (view) / 789 KB (edit), under the budget.
+
+⚠️ **`am pin` rewrites deno.lock without aio's own graph** (dep/aio is a symlink
+outside the tree here, a real directory in CI), which is exactly the drift that
+shipped v0.3.7 as `-dirty`. After every pin, regenerate the lock the way CI
+sees it — copy the tree to a scratch dir with `dep/aio` as a real directory,
+`deno install`, copy `deno.lock` back — before tagging.
 
 ## Version & releases
 

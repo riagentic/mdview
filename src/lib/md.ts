@@ -55,7 +55,15 @@ marked.use({
 
 // Keep the `id` attribute on headings so our in-doc anchor navigation works,
 // and keep `class` so highlight.js styling survives.
+/** DOMPurify's DOM-clobbering guard DROPS a bare `id` that collides with a
+ *  property of `document` (`links`, `title`, `body`, `images`, …), which cost
+ *  those headings their anchor and their outline entry. `SANITIZE_NAMED_PROPS`
+ *  prefixes (`user-content-`, as GitHub does — see ANCHOR_PREFIX in links.ts)
+ *  instead of dropping, so no heading can lose its id. A document's own
+ *  `#slug` links are resolved against both spellings (anchorIds). */
 const PURIFY_CONFIG = {
+  // Prefix ids/names instead of dropping the clobbering ones — see ANCHOR_PREFIX.
+  SANITIZE_NAMED_PROPS: true,
   ALLOWED_ATTR: [
     'href', 'src', 'alt', 'title', 'id', 'class', 'name',
     'width', 'height', 'align', 'colspan', 'rowspan', 'start', 'type',
