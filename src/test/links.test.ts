@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert'
-import { classifyLink, linkKind } from '../lib/links.ts'
+import { anchorIds, classifyLink, linkKind } from '../lib/links.ts'
 
 Deno.test('classifyLink: anchors scroll', () => {
   assertEquals(classifyLink('#section'), 'anchor')
@@ -55,4 +55,11 @@ Deno.test('classifyLink stays consistent with linkKind (routing ↔ marker never
   for (const h of ['#x', './a.md', '/a.md', 'https://h/a.md', 'https://h/page', 'mailto:a@b', 'tel:+1']) {
     assertEquals(classifyLink(h), expected[linkKind(h)], h)
   }
+})
+
+Deno.test('anchorIds: a #hash resolves against both id spellings', () => {
+  // Rendered ids carry the sanitizer's prefix; documents link to the bare slug.
+  assertEquals(anchorIds('#setup'), ['user-content-setup', 'setup'])
+  assertEquals(anchorIds('user-content-setup'), ['user-content-setup', 'setup'])
+  assertEquals(anchorIds('#'), [])
 })

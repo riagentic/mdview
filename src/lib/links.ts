@@ -9,6 +9,21 @@
  *  - `mail`      → `mailto:` / `tel:` → OS handler */
 export type LinkKind = 'anchor' | 'local' | 'remote-md' | 'web' | 'mail'
 
+/** Every rendered heading id carries this prefix (md.ts sets DOMPurify's
+ *  SANITIZE_NAMED_PROPS). Documents link to the bare slug, so an anchor is
+ *  resolved against both spellings — see anchorIds. */
+export const ANCHOR_PREFIX = 'user-content-'
+
+/** The id spellings a `#hash` (or a bare slug) can have in rendered HTML, most
+ *  likely first. Pure; the DOM lookup is the caller's. */
+export function anchorIds(hash: string): string[] {
+  const bare = hash.replace(/^#/, '')
+  if (!bare) return []
+  return bare.startsWith(ANCHOR_PREFIX)
+    ? [bare, bare.slice(ANCHOR_PREFIX.length)]
+    : [ANCHOR_PREFIX + bare, bare]
+}
+
 export function linkKind(href: string): LinkKind {
   if (href.startsWith('#')) return 'anchor'
   if (/^(?:mailto|tel):/i.test(href)) return 'mail'

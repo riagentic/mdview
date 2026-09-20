@@ -1,6 +1,6 @@
 import { afterRender, batch, fade, onCleanup, onMount, Show, signal, Transition, useRef } from 'aio/air'
 import { mdview } from '../cell/mdview.ts'
-import { classifyLink, tagLinks } from '../lib/links.ts'
+import { anchorIds, classifyLink, tagLinks } from '../lib/links.ts'
 import { extractHeadings } from '../lib/outline.ts'
 import Sidebar from './Sidebar.tsx'
 import Editor from './Editor.tsx'
@@ -34,10 +34,19 @@ const processLinks = tagLinks
 
 // ── Outline (TOC) ─────────────────────────────────────────────────
 
+/** Find an anchor target under `root` by either id spelling (see anchorIds). */
+function findAnchor(root: ParentNode, hash: string): Element | null {
+  for (const id of anchorIds(hash)) {
+    const el = root.querySelector(`[id="${CSS.escape(id)}"]`)
+    if (el) return el
+  }
+  return null
+}
+
 function scrollToHeading(id: string): void {
   if (!id) return
-  const el = document.querySelector(`.content-scroll [id="${CSS.escape(id)}"]`)
-  el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const scroll = document.querySelector('.content-scroll')
+  if (scroll) findAnchor(scroll, id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function Outline() {
@@ -209,8 +218,7 @@ function Article({ html, zoom }: { html: string; zoom: number }) {
 
       const anchor = pendingAnchor.peek()
       if (anchor) {
-        const target = el.querySelector(`[id="${CSS.escape(anchor)}"]`)
-        target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        findAnchor(el, anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
         pendingAnchor.set('')
       }
     }
@@ -442,8 +450,7 @@ export default function MdviewPage() {
 
       if (action === 'anchor') {
         const contentEl = link.closest('.content-scroll') as HTMLElement | null
-        const target = contentEl?.querySelector(`[id="${CSS.escape(href.slice(1))}"]`)
-        target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        if (contentEl) findAnchor(contentEl, href)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
         return
       }
       if (action === 'external') { mdview.openExternal(href); return } // web/mail → OS browser
