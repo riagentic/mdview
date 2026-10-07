@@ -1,10 +1,16 @@
 # aio framework notes (from mdview compat passes)
 
-Project verified against **aio v1.0.6-beta** (`dep/aio` →
-`~/.local/lib/aio-versions/v1.0.6-beta`).
+Project verified against **aio v1.0.19-beta** (`dep/aio` →
+`~/.local/lib/aio-versions/v1.0.19-beta`).
 Status: ✅ fully compatible. Checks: `deno check` ✓ · `aiol` 0 warnings / 0 hints ✓ ·
-89/89 tests ✓ · `am fix --dry-run` clean ✓ · boots (source), errors=0 and zero
-renderer warnings ✓.
+95/95 tests ✓ · doctor 17/17 ✓ · `deno install --frozen` in a CI-shaped clone ✓ ·
+boots (source, Electron), errors=0 and zero renderer warnings ✓.
+
+## v1.0.6-beta → v1.0.19-beta — nothing to port
+
+`am pin v1.0.19-beta && am fix`; no app code changed. The pin moved three
+aio-owned dependencies in the import map: Electron `44.4.1` → `44.5.1`, esbuild
+`0.24.2` → `0.25.12`, happy-dom `17.6.3` → `20.14.5`. `deno.lock` regenerated.
 
 ## v1.0.5-beta → v1.0.6-beta — nothing to port (additive only)
 
