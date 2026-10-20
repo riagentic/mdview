@@ -1,10 +1,21 @@
 # aio framework notes (from mdview compat passes)
 
-Project verified against **aio v1.0.19-beta** (`dep/aio` →
-`~/.local/lib/aio-versions/v1.0.19-beta`).
+Project verified against **aio v1.0.22-beta** (`dep/aio` →
+`~/.local/lib/aio-versions/v1.0.22-beta`).
 Status: ✅ fully compatible. Checks: `deno check` ✓ · `aiol` 0 warnings / 0 hints ✓ ·
 95/95 tests ✓ · doctor 17/17 ✓ · `deno install --frozen` in a CI-shaped clone ✓ ·
-boots (source, Electron), errors=0 and zero renderer warnings ✓.
+boots (source, Electron), errors=0 ✓.
+
+## v1.0.19-beta → v1.0.22-beta — nothing to port
+
+`am pin v1.0.22-beta && am fix`; no app code changed. The pin moved Electron
+`44.5.1` → `44.7.0`. What mdview can notice:
+
+- 1.0.20: every new setting is opt-in (`am fix --harden` writes them; `am doctor`
+  suggests none). Android builds now need Android 10 (was 7).
+- 1.0.21: the desktop window profile moves once into `~/.mdview/electron/`.
+- 1.0.22: an update keeps one old version in `old/` (was three);
+  `updates: { keepOld: 3 }` restores it. `build.splash` is available, unused.
 
 ## v1.0.6-beta → v1.0.19-beta — nothing to port
 

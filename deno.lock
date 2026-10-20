@@ -25,7 +25,7 @@
     "jsr:@std/testing@1.0.17": "1.0.17",
     "jsr:@std/yaml@1.0.9": "1.0.9",
     "npm:dompurify@3": "3.4.11",
-    "npm:electron@44.5.1": "44.5.1",
+    "npm:electron@44.7.0": "44.7.0",
     "npm:esbuild@0.25.12": "0.25.12",
     "npm:happy-dom@20.14.5": "20.14.5",
     "npm:highlight.js@11": "11.11.1",
@@ -366,8 +366,8 @@
         "@types/trusted-types"
       ]
     },
-    "electron@44.5.1": {
-      "integrity": "sha512-lx7AYoFIiyvEvgvpyWO9kOC60xtNPpiPZAth6Fmg9NutzpCAMLwpUlaBY2EXfZyIgUdzEmLMj9KvK0Vrokl1yQ==",
+    "electron@44.7.0": {
+      "integrity": "sha512-aUq9/zLAAFYc+a9gy6cd0C3Y/N/RmovLCD8TV8LhIzNhuND6HEgsu96jJz9cbAxvckSPv+Trf2PKEjktoZgFkw==",
       "dependencies": [
         "@electron-internal/extract-zip",
         "@electron/get",
@@ -628,7 +628,7 @@
       "jsr:@std/assert@1.0.19",
       "jsr:@std/path@1.1.3",
       "npm:dompurify@3",
-      "npm:electron@44.5.1",
+      "npm:electron@44.7.0",
       "npm:esbuild@0.25.12",
       "npm:happy-dom@20.14.5",
       "npm:highlight.js@11",
@@ -637,7 +637,7 @@
       "npm:marked@14"
     ],
     "links": {
-      "jsr:@riagentic/aio@1.0.19-beta": {
+      "jsr:@riagentic/aio@1.0.22-beta": {
         "dependencies": [
           "jsr:@std/assert@1.0.19",
           "jsr:@std/fs@1.0.24",
