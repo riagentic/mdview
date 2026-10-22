@@ -1,5 +1,5 @@
 {
-  "aioVersion": "v1.0.22-beta",
+  "aioVersion": "v1.0.23-beta",
   "title": "mdview",
   "version": "0.3",
   "nodeModulesDir": "auto",
@@ -15,7 +15,7 @@
     "strict": true
   },
   "imports": {
-    "electron": "npm:electron@44.7.0",
+    "electron": "npm:electron@44.9.0",
     "aio": "./dep/aio/mod.ts",
     "aio/air": "./dep/aio/src/air.ts",
     "aio/server": "./dep/aio/src/server-entry.ts",
@@ -53,6 +53,7 @@
     "targets": [
       "electron",
       "android"
-    ]
+    ],
+    "electronRuntime": "online"
   }
 }
