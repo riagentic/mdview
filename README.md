@@ -86,7 +86,7 @@ deno task build --targets=android
 ## Stack
 
 - Deno 2.9+ / TypeScript / Electron
-- [aio](https://github.com/riagentic/aio) `v1.0.5-beta` — AIR renderer, state management, persistence
+- [aio](https://github.com/riagentic/aio) `v1.0.25-beta` — AIR renderer, state management, persistence
 - [marked](https://github.com/markedjs/marked) — markdown parsing
 - [highlight.js](https://highlightjs.org/) — syntax highlighting
 - [dompurify](https://github.com/cure53/DOMPurify) + [jsdom](https://github.com/jsdom/jsdom) `^26` — HTML sanitization
