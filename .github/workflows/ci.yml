@@ -1,0 +1,35 @@
+# Correctness only: install (frozen lock), type check, lint and tests on Linux.
+# Builds and releases are made locally.
+#
+# aio is vendored locally as `dep/aio` (a checkout of the framework repo at
+# deno.json's `aioVersion`, gitignored here); CI recreates the same layout.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: aio
+        run: echo "ref=$(jq -r .aioVersion deno.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: riagentic/aio
+          ref: ${{ steps.aio.outputs.ref }}
+          path: dep/aio
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.x # aio's minimum is 2.9.0
+      - run: deno install --frozen # an incomplete deno.lock fails here
+      - run: deno task check
+      - run: deno task lint # deno lint + aiol
+      - run: deno task test
